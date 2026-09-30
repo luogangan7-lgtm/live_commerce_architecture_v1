@@ -1,0 +1,72 @@
+From e0350dc1db20a6c92272e6e25ff153c30fb3512f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 12:26:48 +0000
+Subject: [PATCH 3/4] deploy: record local re-run of smoke full after F1-F3
+ fixes
+
+Author re-run of f318632 in a scratch clone with the I1 cmd/migrate
+proposal (not committed) and sandbox-CA base images passed through
+GO_IMAGE/NODE_IMAGE: 45 PASS / 0 FAIL / 1 BLOCKED (S29m = I8), exit 3.
+S07 built with --network host because of the loopback proxy. S08, S21,
+S34 and S39 pass, and S39 covers all four rollback paths. Teardown was
+clean and the secret scan found 0 hits.
+
+The build-images.sh warning no longer says LC_BUILD_NETWORK=default
+"refuses". It keeps the isolated build network and warns.
+
+An independent re-run is still owed; the author is not the sole
+acceptor.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01JteRiLhGBXZ4UzNCqjoeFy
+---
+ deploy/README.md               | 6 +++---
+ deploy/scripts/build-images.sh | 2 +-
+ docs/runbooks/deploy.md        | 1 +
+ 3 files changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/deploy/README.md b/deploy/README.md
+index f2f83dc..60d35f8 100644
+--- a/deploy/README.md
++++ b/deploy/README.md
+@@ -80,9 +80,9 @@ The media worker is **not deployed**, because it is MOCK-only (`worker_env.go:17
+ | Static package: syntax, shellcheck, pins, compose config (4 profile sets × 2 files), lcentry tests (96.7 %), Caddyfile validate/fmt, ignore files | **PASS** | `smoke.sh static` (S01–S06) |
+ | `smoke.sh full` | **BLOCKED** at S07: `cmd/migrate` missing (I1) | exits 3, evidence under `.evidence/` |
+ | DB layer + edge with **scratch** images: postgres (non-root, read-only, checksums, archiving), migrate ×2 over the socket, provision-logins ×2 (12 logins, matrix, TCP auth, readiness), superuser-over-TCP rejected, api/caddy healthy, worker ready tokens, Caddy internal-CA TLS, default-deny, webhook routing, 308 redirect, unknown Host not proxied, 503 + Retry-After window, hardening of 7 containers, no secret in inspect/logs, backup + restore into a new DB, WAL archiving, basebackup + `pg_verifybackup`, PITR drill (2 s), watchdog W2–W9, diagnostics bundle, graceful stop, clean teardown | **VERIFIED_LOCAL (scratch)** | Scratch `lc-go` built on the host from this tree plus the §7 `cmd/migrate` proposal (outside the worktree, not committed); real `lc-caddy` from `docker/caddy.Dockerfile`. This is not product acceptance |
+-| All 4 image builds + `smoke.sh full` with the I1 proposal (independent test_worker, 2026-09-28, scratch clone) | **FAIL → fixed, re-run NOT_RUN** | 41 PASS / 3 FAIL (S08, S34, S39). Root causes F1–F3 below are fixed in this package; S21 was a false PASS and is tightened. A full re-run needs I1 and is owed by the independent verifier |
+-| `deploy.sh` first/upgrade (S37, S38) | **VERIFIED_LOCAL (scratch, I1 proposal)** | Same run; app-rollback (S39) failed on F3, fixed, re-run NOT_RUN |
+-| Logical-restore media gate (S29m) | **BLOCKED (I8)** | Live `media_plan_ready=t`, restored `f`; was hidden inside S29 PASS, now its own case |
++| All 4 image builds + `smoke.sh full` with the I1 proposal: independent test_worker run on 22d5d3f | **FAIL** | 41 PASS / 3 FAIL (S08, S34, S39). S21 was a false PASS. Root causes F1–F3 are in deviations 10–12 |
++| Same, author re-run after the fixes (f318632, scratch clone + `cmd/migrate` proposal, sandbox-CA base images via `GO_IMAGE`/`NODE_IMAGE`) | **VERIFIED_LOCAL: 45 PASS / 0 FAIL / 1 BLOCKED**, exit 3 | S07 built through `--network host` (loopback proxy); S08 7 names; S21 `307 -> /zh-CN -> 200`; S34 Chromium PASS; S37–S39 PASS (S39 covers all 4 rollback paths); S33 clean; secret scan hits=0. An independent re-run is still owed, because the author cannot be the only acceptor |
++| Logical-restore media gate (S29m) | **BLOCKED (I8)** | Live `media_plan_ready=t`, restored `f`, PITR `t`. It used to be hidden inside the S29 PASS |
+ | Real ACME/DNS, OIDC login, PAYUNi sandbox/live, Meta webhooks, media, 2-host TLS, K8s, load, CVE scan | **NOT_RUN** | Need owner inputs (O2, O3, O11, B3–B6) |
+ 
+ ## Deploy-only dependency ledger (integrator: copy into docs/implementation/dependencies.md, I5)
+diff --git a/deploy/scripts/build-images.sh b/deploy/scripts/build-images.sh
+index 9f694b0..1cfc54d 100755
+--- a/deploy/scripts/build-images.sh
++++ b/deploy/scripts/build-images.sh
+@@ -73,7 +73,7 @@ case "${LC_BUILD_NETWORK:-auto}" in
+ auto)
+   if [[ -n "$loopback_proxy" ]]; then
+     net_args=(--network host)
+-    lc_warn "proxy variable(s)${loopback_proxy} point at host loopback, unreachable from the isolated build network: building with --network host (set LC_BUILD_NETWORK=default to refuse)"
++    lc_warn "proxy variable(s)${loopback_proxy} point at host loopback, unreachable from the isolated build network: building with --network host (LC_BUILD_NETWORK=default keeps the isolated network)"
+   fi
+   ;;
+ host) net_args=(--network host) ;;
+diff --git a/docs/runbooks/deploy.md b/docs/runbooks/deploy.md
+index 4dcde7c..f6fe3cd 100644
+--- a/docs/runbooks/deploy.md
++++ b/docs/runbooks/deploy.md
+@@ -6,6 +6,7 @@ Reads env / secrets: 无（命令读取 /etc/live-commerce/compose.env 与 secre
+ Used by: 运维/owner/集成者；deploy/README.md 链接到此。
+ Depends on: deploy/scripts/*.sh, deploy/compose.yml, deploy/env/*.env.example。
+ Status: DESIGN。未在生产执行过；smoke full 目前 BLOCKED（缺 cmd/migrate，I1）。
++  本地（scratch 克隆，加入 I1 提案）：45 PASS / 1 BLOCKED（S29m，I8），包括 first/upgrade/app-rollback 全部路径。
+ Change rules: 命令必须与脚本保持一致；改脚本行为时同步本文。
+ -->
+ # 部署运行手册（live-commerce）
+-- 
+2.43.0
+

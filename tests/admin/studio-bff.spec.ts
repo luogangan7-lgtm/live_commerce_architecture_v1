@@ -87,7 +87,8 @@ test("Studio BFF signed browser session, exact six routes and fail-closed transp
     const prepared = await raw(detail, "GET", authorized);
     assert.equal(prepared.status, 200, prepared.body);
     const studio = JSON.parse(prepared.body) as Record<string, any>;
-    assert.deepEqual(Object.keys(studio).sort(), ["attempt", "can_manage", "draft", "prepared"]);
+    assert.deepEqual(Object.keys(studio).sort(), ["attempt", "can_manage", "draft", "media_enabled", "prepared"]);
+    assert.equal(studio.media_enabled, true); // this harness mounts the MOCK media planner (G2 capability)
     assert.equal(studio.prepared.authorization_id, authorization);
     assert.equal(studio.attempt, null);
     assert.deepEqual(Object.keys(studio.prepared.destinations[0]).sort(), ["ordinal", "provider"]);

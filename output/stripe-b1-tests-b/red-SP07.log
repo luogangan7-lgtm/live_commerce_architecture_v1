@@ -1,0 +1,31 @@
+# RED proof SP07 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: reference BeginHosted digest ignores the locale, so a replay with a changed locale is not a 409 conflict
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP07Start$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_start_test.go:396: changed_locale: same key with changed frozen input was not 409: <nil>
+--- FAIL: TestStripeSP07Start (10.70s)
+    --- PASS: TestStripeSP07Start/atomic_rows_and_zero_provider_calls (1.99s)
+    --- FAIL: TestStripeSP07Start/replay_and_frozen_input_conflicts (0.79s)
+    --- PASS: TestStripeSP07Start/concurrent_payuni_vs_stripe_one_winner (0.86s)
+    --- PASS: TestStripeSP07Start/mixed_provider_lock_workload_no_deadlock (1.48s)
+    --- PASS: TestStripeSP07Start/admission_drift (4.20s)
+        --- PASS: TestStripeSP07Start/admission_drift/method_stale_version (0.73s)
+        --- PASS: TestStripeSP07Start/admission_drift/method_disabled (0.49s)
+        --- PASS: TestStripeSP07Start/admission_drift/method_hidden (0.37s)
+        --- PASS: TestStripeSP07Start/admission_drift/amount_below_method_minimum (0.36s)
+        --- PASS: TestStripeSP07Start/admission_drift/amount_above_method_maximum (0.32s)
+        --- PASS: TestStripeSP07Start/admission_drift/qualification_revoked (0.33s)
+        --- PASS: TestStripeSP07Start/admission_drift/qualification_expired (0.36s)
+        --- PASS: TestStripeSP07Start/admission_drift/binding_disabled (0.31s)
+        --- PASS: TestStripeSP07Start/admission_drift/wrong_environment_on_method (0.31s)
+        --- PASS: TestStripeSP07Start/admission_drift/mock_evidence_on_sandbox_profile (0.33s)
+        --- PASS: TestStripeSP07Start/admission_drift/hold_expired_before_start (0.30s)
+    --- PASS: TestStripeSP07Start/currency_not_admitted_JPY (0.30s)
+    --- PASS: TestStripeSP07Start/hold_expires_during_lock_wait (0.40s)
+    --- PASS: TestStripeSP07Start/rotation_fences_new_starts_until_requalified (0.36s)
+    --- PASS: TestStripeSP07Start/constructor_negatives (0.31s)
+FAIL
+FAIL	livecommerce/tests/foundation	11.257s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

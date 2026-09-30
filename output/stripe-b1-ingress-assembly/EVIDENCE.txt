@@ -1,0 +1,8 @@
+unit: stripe-b1-ingress-assembly   base: ba08af8   date: 2026-09-29   go: go1.27.1
+MOCK   go test -race -count=1 ./internal/payments/... ./internal/integrations/psp/stripe/... ./cmd/...   exit 0   (go-test.log; -v counts in go-test-v.log: 279 PASS 0 FAIL 2 SKIP[TestStripeSP16Sandbox NOT_RUN, fixture-empty-db])
+MOCK   go vet ./cmd/... ./internal/...  exit 0 ; go build ./... exit 0 ; gofmt -l internal cmd empty
+MOCK   mutation red runs (7, all failed as required): mutation-red.log
+REAL_PG bash scripts/dev/test-focused.sh '^Test(BuyerPaymentWorker|MetaRuntime|StripeSP(06|11|13)|StripeAuthority)'  exit 0  PASS=25 FAIL=0 SKIP=0  (pg-focused.log)
+       regression evidence only: includes real cmd/api and cmd/payment-worker binary startup tests; no StripeAuthority test exists (regex matched none).
+NOT_RUN  handler/pgStore.admit and registrar SQL against PG (BLOCKED_ON_POOL_FIX: platform.OpenStripeIngressPool/OpenStripeRegistrarPool admission)
+NOT_RUN  SANDBOX probe (STRIPE_SANDBOX=1), SP15 binaries, SP13/SP21 unit-owned gates (tests-b)

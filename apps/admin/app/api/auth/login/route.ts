@@ -1,3 +1,4 @@
+// POST /api/auth/login → POST /v1/identity/login/start (internal/identityhttp); OIDC only, 404 without COMMERCE_OIDC_ISSUER (U4).
 import {
   authConfig,
   disabledResponse,
@@ -14,7 +15,8 @@ import {
 } from "@/lib/auth";
 
 export async function POST(request: Request) {
-  if (!authConfig) return disabledResponse();
+  // U4: password-only deployments have no OIDC issuer; this route then does not exist.
+  if (!authConfig?.issuer) return disabledResponse();
   if (new URL(request.url).search || !requireOrigin(request))
     return localError(403, "forbidden");
   let locale: Locale = "zh-CN";
@@ -53,7 +55,7 @@ export async function POST(request: Request) {
 }
 
 export const GET = () =>
-  authConfig
+  authConfig?.issuer
     ? localError(405, "method_not_allowed", "POST")
     : disabledResponse();
 export const PUT = GET;

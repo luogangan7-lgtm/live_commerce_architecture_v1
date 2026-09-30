@@ -1,5 +1,10 @@
-// Package livekit implements bounded LiveKit Cloud Egress and browser-input wire profiles.
-// It reports provider observations, not audience, billing, or resource closure.
+// Package livekit owns the bounded LiveKit Cloud Egress and browser-input wire profiles: the HTTP
+// client, response decoding, sealed project material and the media worker environment loader.
+//
+// It reports provider observations, not audience, billing, or resource closure; it never decides
+// live session state (internal/live does), never logs a key or token, and never reaches a host
+// outside the configured project URL. External host: the LiveKit Cloud project named in the worker
+// environment.
 package livekit
 
 import (

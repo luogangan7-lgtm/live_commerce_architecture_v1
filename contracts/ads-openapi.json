@@ -1,0 +1,1261 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Live Commerce merchant Meta ads API",
+    "version": "meta-ads-v1 FROZEN 2026-09-30",
+    "description": "Merchant ads routes (internal/httpapi/ads.go; contracts/meta-ads-v1.md). Source: docs/delivery/units/ads-core.md Frozen HTTP (D1 base path, D5 extra reads, D6 callback JSON); responses are the Draft/settings/report JSON documented there. Tenant and store come from the merchant session. Errors use the shared internal/httperror body {code,message,request_id,retryable,details} (the brief's {error} shape was wrong). Mounted only when cmd/api builds the ads service (COMMERCE_META_ADS_APP_ID) and, per ruling B15, only after 0080 (ads-capi) is merged."
+  },
+  "paths": {
+    "/v1/admin/stores/{store_id}/ads/meta/connect": {
+      "post": {
+        "operationId": "adsMetaConnect",
+        "x-permission": "ads:manage+integration:manage",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/meta/callback": {
+      "get": {
+        "operationId": "adsMetaCallback",
+        "x-permission": "ads:manage",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/meta/states/{state_id}": {
+      "get": {
+        "operationId": "adsMetaState",
+        "x-permission": "ads:manage",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "state_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/meta/bindings": {
+      "post": {
+        "operationId": "adsMetaBind",
+        "x-permission": "ads:manage+integration:manage",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsBindInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/settings": {
+      "get": {
+        "operationId": "adsSettings",
+        "x-permission": "ads:read",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/drafts": {
+      "get": {
+        "operationId": "adsListDrafts",
+        "x-permission": "ads:read",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "adsCreateDraft",
+        "x-permission": "ads:manage",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsDraftInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/drafts/{draft_id}": {
+      "get": {
+        "operationId": "adsGetDraft",
+        "x-permission": "ads:read",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        }
+      },
+      "put": {
+        "operationId": "adsUpdateDraft",
+        "x-permission": "ads:manage",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,3}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsDraftInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/drafts/{draft_id}/approve": {
+      "post": {
+        "operationId": "adsApproveDraft",
+        "x-permission": "ads:approve",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsApproveInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/drafts/{draft_id}/publish": {
+      "post": {
+        "operationId": "adsPublishDraft",
+        "x-permission": "ads:approve",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsPublishInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/drafts/{draft_id}/pause": {
+      "post": {
+        "operationId": "adsPauseDraft",
+        "x-permission": "ads:manage",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/drafts/{draft_id}/end": {
+      "post": {
+        "operationId": "adsEndDraft",
+        "x-permission": "ads:approve",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "draft_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/report": {
+      "get": {
+        "operationId": "adsReport",
+        "x-permission": "ads:read",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        }
+      }
+    },
+    "/v1/admin/stores/{store_id}/ads/capi": {
+      "put": {
+        "operationId": "adsSetCapi",
+        "x-permission": "ads:manage",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "COMMIT acknowledged"
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "402": {
+            "description": "billing_restricted (approve/publish)"
+          },
+          "403": {
+            "description": "forbidden"
+          },
+          "404": {
+            "description": "not_found"
+          },
+          "409": {
+            "description": "state_mismatch|revision_changed|over_allowance|attempt_changed|prior_attempt_not_paused|draft_approved|binding_disabled|client_business_changed|conflict"
+          },
+          "410": {
+            "description": "state_expired"
+          },
+          "422": {
+            "description": "invalid_request|not_in_pick_list|budget_below_minimum|not_whole_unit|currency_mismatch|starts_too_soon|source_not_owned|product_not_published"
+          },
+          "502": {
+            "description": "meta_connect_failed (callback only)"
+          },
+          "503": {
+            "description": "retry_later|unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdsCapiInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/buyer/feeds/meta.csv": {
+      "get": {
+        "operationId": "adsMetaProductFeed",
+        "description": "Public Meta catalog feed of one verified storefront host (meta-ads-v1 §7, ads-capi C6; internal/attribution FeedHandler via cmd/api mountFeed on the buyer runtime pool). Called only by the storefront BFF (apps/storefront/app/feeds/meta.csv/route.ts): the store is resolved from X-Commerce-Storefront-Origin, never from a query or store parameter; any query is 422. Columns F17: id,title,description,availability,condition,price,link,image_link,brand.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "X-Commerce-Buyer-BFF-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "storefront BFF key; wrong, missing or repeated = 401 before any SQL (constant-time compare)"
+          },
+          {
+            "name": "X-Commerce-Storefront-Origin",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "BFF-set origin of the verified storefront Host"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "CSV feed; Cache-Control: public, max-age=900",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized"
+          },
+          "404": {
+            "description": "not_found (origin resolves to no published store)"
+          },
+          "405": {
+            "description": "method_not_allowed"
+          },
+          "422": {
+            "description": "invalid_request"
+          },
+          "503": {
+            "description": "unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "merchantBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Opaque short-lived merchant session; server stores hash only."
+      }
+    },
+    "schemas": {
+      "AdsDraftInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ad_binding_id",
+          "identity_binding_id",
+          "template",
+          "source_ref",
+          "currency",
+          "lifetime_budget_minor",
+          "starts_at",
+          "ends_at",
+          "countries",
+          "age_min",
+          "age_max"
+        ],
+        "properties": {
+          "ad_binding_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "identity_binding_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "template": {
+            "enum": [
+              "BOOST_POST",
+              "PRODUCT_TRAFFIC"
+            ]
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "currency": {
+            "enum": [
+              "TWD",
+              "USD",
+              "HKD"
+            ]
+          },
+          "lifetime_budget_minor": {
+            "type": "integer",
+            "minimum": 100
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ends_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "countries": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Z]{2}$"
+            },
+            "minItems": 1,
+            "maxItems": 10
+          },
+          "age_min": {
+            "type": "integer",
+            "minimum": 18,
+            "maximum": 65
+          },
+          "age_max": {
+            "type": "integer",
+            "minimum": 18,
+            "maximum": 65
+          }
+        }
+      },
+      "AdsApproveInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "AdsPublishInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "publish_attempt"
+        ],
+        "properties": {
+          "publish_attempt": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 5
+          }
+        }
+      },
+      "AdsBindInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "state_id",
+          "ad_account_id"
+        ],
+        "properties": {
+          "state_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ad_account_id": {
+            "type": "string",
+            "pattern": "^[0-9]{1,40}$"
+          },
+          "dataset_id": {
+            "type": "string",
+            "pattern": "^[0-9]{1,40}$"
+          }
+        }
+      },
+      "AdsCapiInput": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "dataset_binding_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "test_event_code": {
+            "type": "string",
+            "pattern": "^[A-Z0-9]{4,20}$"
+          }
+        }
+      }
+    }
+  }
+}

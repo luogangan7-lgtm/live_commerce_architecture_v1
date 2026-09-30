@@ -63,7 +63,7 @@ export type Service = {
   name_hans: string;
   name_hant: string;
   name_en: string;
-  delivery_kind: "home" | "cvs_711" | "cvs_familymart";
+  delivery_kind: "home" | "cvs_711" | "cvs_familymart" | "cvs_hilife" | "cvs_okmart";
   mode: "MANUAL" | "API";
   enabled: boolean;
   visible: boolean;

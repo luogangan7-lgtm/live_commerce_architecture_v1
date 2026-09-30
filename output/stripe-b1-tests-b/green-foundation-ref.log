@@ -1,0 +1,23 @@
+# GREEN run against the scratch reference implementation (worktree + scratch overlay implementing the FROZEN signatures) -- NOT the merged candidate, NOT integration evidence
+# tests commit: 87cfd8f  base b563bb5 (+docs ba08af8)  evidence label: MOCK (fake Stripe, real PG 18, real River)
+# ref implementation stand-ins: checkout Stripe path, stripeadmin, stripewebhook, buyerhttp routes, cmd seams, ProbeCheckout; ungated Stripe pools + ingress UPDATE(kind) grant (pool-fix stand-ins)
+# command: LC_FOCUSED_TIMEOUT=1800s bash scripts/dev/test-focused.sh '^TestStripeSP(07|08|09|10|11|12|13|14|15|21)'
+--- PASS: TestStripeSP14BuyerHTTP (7.75s)
+--- PASS: TestStripeSP08HappyMock (9.34s)
+--- PASS: TestStripeSP09CreateUnknown (45.73s)
+--- PASS: TestStripeSP10Deadline (52.20s)
+--- PASS: TestStripeSP11BuyerSignals (33.54s)
+--- PASS: TestStripeSP12MoneyChecks (99.73s)
+--- PASS: TestStripeSP21PinnedHandoffAfterKeyRotation (0.34s)
+--- PASS: TestStripeSP15Process (27.06s)
+    stripe_registrar_test.go:400: NOT_RUN: set STRIPE_SANDBOX=1 with a test STRIPE_SECRET_KEY and STRIPE_ACCOUNT_ID to probe the real sandbox (creates and expires one test session, no charge)
+--- PASS: TestStripeSP21Registrar (0.86s)
+    --- SKIP: TestStripeSP21Registrar/sandbox_probe_against_real_stripe (0.00s)
+--- PASS: TestStripeSP13EndpointPrepareLocksRotation (0.38s)
+--- PASS: TestStripeSP13AcceptedReceiptNeedsCommittedLink (0.12s)
+--- PASS: TestStripeSP11SQLSignalLoader (0.31s)
+--- PASS: TestStripeSP07Start (6.69s)
+--- PASS: TestStripeSP13WebhookHTTP (6.20s)
+PASS
+ok  	livecommerce/tests/foundation	291.708s
+test-focused: top-level PASS=14 FAIL=0 SKIP=0 exit=0

@@ -1,0 +1,278 @@
+{
+ "pay": {
+  "a1": {
+   "status": "DONE",
+   "summary": "Amended /Volumes/data/live_commerce_architecture_v1/contracts/stripe-refund-v1.md and /Volumes/data/live_commerce_architecture_v1/contracts/manual-fulfilment-v1.md. Both status headers now read \"DRAFT (amended round 1)\". I checked all 17 findings against the migrations, internal/payments/stripe_signal.go and internal/merchantorders/orders.go. All 7 P1 and all 10 P2 were confirmed, with small corrections noted below. Every change is marked (A1) in the text, and each contract ends with a map from finding to fix (refund §13, fulfilment §9). Integrator rulings are kept; only R-5 has a \"Superseded by amendment:\" note. I did not edit code, migrations or other contracts, and did not commit. Evidence: DESIGN only. `python3 scripts/check_packet.py` exit 0 (PASS_PACKET_STRUCTURE_ONLY). All RF/MF/OP01 gates are NOT_RUN.",
+   "resolved": [
+    "P1 refund signals cannot commit or be consumed: new §4.6 replaces stripe_webhook_prepare (DROP+CREATE; return adds refund_id and object_type), stripe_webhook_commit and guard_stripe_receipt_link (expected job operation_id = coalesce(refund_id, attempt_id)). It also replaces load_stripe_signal (DROP+CREATE; adds object_type and refund_id) and consume_stripe_signal. Both choose their lease check from the op's actor_kind, using a new private require_stripe_refund for refund ops. This keeps the job args shape unchanged, so the worker needs no way to tell refund jobs apart. payment_job_queue resolves refund ids through stripe_refunds. The charge branch never returns NOOP_TERMINAL. RF08 gains these cases.",
+    "P1 grants: new §4.5 gives commerce_checkout_writer the same identity.sessions and resolve_access grants that 0060 gives commerce_claims_writer. It also adds INSERT on ops.command_results and ops.audit_events with RESTRICTIVE policies, plus operations/operation_events policies for PAYMENT_REFUND. Merchant definers set the buyer GUCs from the locked order, so the existing stripe_sessions, stripe_signals and payment_attempts policies apply. commerce_runtime (platform.OpenPool) gets river_payment SELECT/INSERT/UPDATE(kind) and sequence USAGE, the same set commerce_checkout_runtime has from post_river 0005:669-670; the platform validator is updated to match. The fulfilment contract reuses these grants, and RF03/RF04/MF02 assert the privilege matrix.",
+    "P1 pre-send check: the RD9 comparison now runs synchronously in record_stripe_charge_observation (Via=presend, RefundRef; now returns boolean) under the refund-op lease. On excess it sets suppressed_at and inserts REFUND_HISTORY; integration_writer gets SELECT on refund_facts/review_cases and INSERT on review_cases limited to REFUND_HISTORY. mark_sent returns SEND only after a clean presend observation in the current generation, at most 60 s old, with no REFUND_HISTORY or CONFLICTING_REPORT review. apply_stripe_charge no longer suppresses. RF08 asserts zero POST /v1/refunds.",
+    "P1 refund reviews turning orders into PAID_ALLOCATION_FAILED: apply_stripe_observation is re-created in 0062 with one change, the post-capture review branch runs only when v_new_capture OR v_closed_before. The fulfilment state-check trigger now fires from both checkout.orders and manual_shipment_heads. RF07 adds the ship, then REFUND_HISTORY, then replay case.",
+    "P1 merchant-orders validator: the projection invariants are amended in refund §7.1 (refunded states, MERCHANT_SHIPPED, READY/CONFIRMED rules), orders.go is assigned to commerce_worker, and RF09/MF05 gain decode cases.",
+    "P1 MD6: shipping now also requires that no review other than PROVIDER_PRESENTMENT_DRIFT exists on the attempt. The same rule applies to the unshipped filter and the export. MF03 gains REFUND_HISTORY and CONFLICTING_REPORT refusal cases.",
+    "P1 permissions: 0062 and 0063 now re-derive the permission list via pg_get_constraintdef and add no grant rows. New refund §12 defines 0065_owner_provisioning (CREATE OR REPLACE of the 0027 create_initial_store, adding the five new permissions) and gate OP01. RD10, MD8, RF03 and MF02 are reworded to match.",
+    "P2 out-of-order replay: releases and stale 'succeeded' reports are compared using observation received_at. P2 early REFUND_UNRESOLVED: new CHECK first_sent_at < resend_until - 1h (mark_sent returns CLOSED, the refund becomes REJECTED send_window_closed), and list closure waits until greatest(resend_until, last_sent_at + 15 min).",
+    "P2 signal cap: refund receipts count against stripe_refunds.signal_count and charge receipts against a new stripe_sessions.charge_signal_count; the checkout signal_count is untouched. P2 composite FKs: new UNIQUE on payment_attempts(tenant,store,owner,order,id), stripe_refunds FK includes order_id, and refund_facts and stripe_signals use composite FKs to stripe_refunds.",
+    "P2 refund op fields: the op copies binding and buyer fields from the attempt op. A blocked_binding claim records a LOCAL escalate report, which leads to REFUND_UNRESOLVED. Key rotation: calls use the account's current credential head; R-5 is marked superseded with the reason.",
+    "P2 combined reviews: §4.3 gets a combination rule, and RF04 gets both example combinations. R-9: merchant stripe_refund_id added to the refund list response. M-3: seven carrier codes in §3.1 and the CHECK. CSV: guard for leading space/LF, phone as +886 to 0 national form, leading-zero caveat documented. Void body: explicit nulls required, otherwise invalid_void. Missing §12.3 per-principal refund amount limit recorded in §11."
+   ],
+   "not_resolved": [
+    "Two small corrections to the reviewer, both handled in the text. (1) The MD6 fix says commerce_auth already has SELECT on review_cases. Evidence: migrations/0027_merchant_orders.sql:64 grants only SELECT(tenant_id,store_id,attempt_id), so the predicate cannot read reason. The fulfilment contract adds SELECT(reason) (new fact E8). (2) The fix proposed two new functions, load_stripe_refund_signal and consume_stripe_refund_signal. I replaced them with lease-check dispatch inside the existing load_stripe_signal and consume_stripe_signal. Otherwise the payment_signal_v1 job args {operation_id,signal_id,version} give the worker no way to tell a refund signal from a checkout signal.",
+    "Not adopted: 'update cmd/admin-fixture accordingly' (finding P1 permissions). Evidence: cmd/admin-fixture/main.go:115 inserts a fixed list into identity.store_grants directly and never calls create_initial_store, so 0065 does not affect it. §12 says tests onboard through create_initial_store or grant permissions explicitly.",
+    "The RD13/R-5 amendment assumes Stripe idempotency keys are scoped per account, not per API key. This is NOT verified. RF10 must prove it; if it fails, resends revert to the request-time key version. The assumption is listed as unverified in §1."
+   ],
+   "owner_or_integrator_questions": [
+    "Approve the amendments to frozen B1 code, done by CREATE OR REPLACE / DROP+CREATE in 0062 and post_river 0013: stripe_webhook_prepare, stripe_webhook_commit, guard_stripe_receipt_link, load_stripe_signal, consume_stripe_signal, payment_job_queue and apply_stripe_observation. No 'Amendment proposal' section was appended to stripe-psp-v1.md; the deltas are specified in stripe-refund-v1 §4.4/§4.6 instead. Should a formal proposal also be added to the frozen contract?",
+    "Approve granting the merchant API role commerce_runtime INSERT on river_payment.river_job (with the matching change to the internal/platform runtime pool validator), rather than having definers write River rows directly?",
+    "Approve integration_writer INSERT on payments.review_cases limited to reason='REFUND_HISTORY', so the pre-send suppression and its review are written in one transaction?",
+    "Per-principal refund amount limit (架构 §12.3): accept 'none in v1; owner ruling required before any non-owner principal gets payments:refund'?"
+   ]
+  },
+  "r2": {
+   "verdict": "BLOCK",
+   "findings": [
+    {
+     "severity": "P1",
+     "where": "stripe-refund-v1 §4.2 Roles/RLS last sentence, §4.5 table rows 1, 2 and 5 ('exactly the 0060 commerce_claims_writer grants'); manual-fulfilment-v1 §4 (A1) grants bullet, MF02; existing 0013_buyer_checkout.sql:9, 0016:84, 0060_live_claims.sql:45, 0001_foundation.sql:84",
+     "problem": "Round 1: 16 of 17 findings are fixed or correctly rebutted (verified against 0061, post_river 0012, 0027, 0033, 0035 claim_operation and orders.go). Round-1 P1 #2 (grants) is only partly fixed, even though §4.2 says 'Every other grant and policy change is listed exactly in §4.5' and RF03/MF02 assert that exact matrix. (1) commerce_checkout_writer has no USAGE on schema identity or on schema ops. It holds USAGE only on buyer, control, storefront, catalog, pricing, fulfillment, inventory, river, integration and payments. 0060 had to grant commerce_claims_writer `USAGE ON SCHEMA identity` (line 45) next to the two grants §4.5 copies, and §4.5 leaves it out. As a result request_stripe_refund, request_stripe_refund_refresh and record_manual_shipment fail with 42501 on identity.resolve_access, identity.sessions, ops.command_results and ops.audit_events. commerce_auth likewise has USAGE only on identity and control (plus checkout, payments and fulfillment from 0027), so export_unshipped_orders cannot insert its ops.audit_events row. (2) payments.stripe_refunds and payments.refund_facts are FORCE RLS, but no policy is listed for commerce_checkout_writer, which the request, apply and buyer-view definers run as, or for commerce_integration_writer. commerce_integration_writer is also given SELECT on payments.review_cases, which has FORCE RLS since 0018 and whose only policies are for checkout_writer, runtime and auth, but it gets no SELECT policy. Under FORCE RLS a missing policy returns zero rows and raises no error. mark_stripe_refund_sent's check that no REFUND_HISTORY or CONFLICTING_REPORT review exists therefore always passes: the RD9 gate fails open. The RD9 Σ of sent refunds reads 0, so the second partial refund of any attempt is suppressed and gets a sticky REFUND_HISTORY, which blocks all later refunds and shipping. The webhook commit's `stripe_refunds ... FOR UPDATE` for the signal_count cap also finds no row.",
+     "fix": "Add these rows to stripe-refund-v1 §4.5: \"`commerce_checkout_writer` | `GRANT USAGE ON SCHEMA identity, ops` (0060 line 45 gave commerce_claims_writer the identity half) | merchant auth + ops rows\". \"(0062) Policies: `stripe_refund_checkout ON payments.stripe_refunds TO commerce_checkout_writer` and `refund_fact_checkout ON payments.refund_facts TO commerce_checkout_writer`, each USING/WITH CHECK `tenant_id`,`store_id` = `app.tenant_id`/`app.store_id` (the 0018 `private_writer` shape); `stripe_refund_integration ON payments.stripe_refunds TO commerce_integration_writer USING(true) WITH CHECK(true)`, `refund_fact_integration ON payments.refund_facts FOR SELECT TO commerce_integration_writer USING(true)`, `review_integration_read ON payments.review_cases FOR SELECT TO commerce_integration_writer USING(true)` (the 0061 `stripe_*_integration` shape).\" Add to manual-fulfilment-v1 §4 (A1) grants bullet: \"`GRANT USAGE ON SCHEMA ops TO commerce_auth` (0063).\" Extend RF03/MF02: each listed policy and schema USAGE exists; with REFUND_HISTORY present, mark_stripe_refund_sent returns CLOSED, not SEND; a second partial refund of a clean attempt is not suppressed."
+    },
+    {
+     "severity": "P2",
+     "where": "stripe-refund-v1 §4.6 first two bullets (prepare/commit), §7.3; existing 0061:450-555 (prepare), post_river 0012:339-363 (commit)",
+     "problem": "(a) The frozen prepare has no argument for payment_intent or metadata.lc_refund. §4.6 changes only its return type, yet the §7.3 mapping needs both values. (b) The contract puts 'over cap → existing signal_cap IGNORED path' in the commit bullet, but IGNORED is decided in prepare. Commit can only raise PT409 on an already-ACCEPTED receipt, so an over-cap refund or charge event would roll back and never be ACKed.",
+     "fix": "In the §4.6 prepare bullet, state the new signature: the existing 16 args + `p_payment_intent text, p_metadata_refund text`. Add: \"prepare locks the counter for the object type FOR UPDATE (`stripe_refunds.signal_count` for refunds, `stripe_sessions.charge_signal_count` for charges) and returns IGNORED `signal_cap` at 64. commit re-checks the same counter and raises PT409 only on a race.\""
+    },
+    {
+     "severity": "P2",
+     "where": "stripe-refund-v1 §4.4 request_stripe_refund ('inserts op (UNKNOWN, reconcile)'); existing post_river 0012:230-236, 0017 provider_observations CHECK(first_generation>1), require_stripe_query p_generation<2 guard",
+     "problem": "The refund op's initial generation and lease columns are not specified. If it is born with generation 0, the first claim yields generation 1. provider_observations.first_generation>1 then rejects every refund and charge report, and a fence copied from require_stripe_query rejects p_generation<2. 'UNKNOWN, reconcile' also contradicts CHECK((lease_until IS NULL)=(lease_mode='')).",
+     "fix": "Replace 'inserts op (UNKNOWN, reconcile)' with \"inserts op with state='UNKNOWN', generation=1, lease_mode='', lease_until=NULL, lease_token_hash=NULL (exactly as start_stripe_payment's op)\"."
+    },
+    {
+     "severity": "P2",
+     "where": "stripe-refund-v1 RD13, 'Integrator rulings' R-5 ('Superseded by amendment'), RF10; §6 SignalWorker charge branch",
+     "problem": "The author amendment overrides a binding integrator ruling (R-5) on its own authority. RD13 also stays conditional on an unverified SANDBOX result, with a fallback that brings back the 401 stranding. The contract would freeze with two alternative credential designs. In addition, the charge branch runs under the checkout lease and still uses load_stripe_credential's frozen attempt version, so after a revoking rotation charge.refunded retrieves fail with 401 permanently.",
+     "fix": "Mark R-5 as 'integrator re-ruling required before freeze' instead of 'Superseded'. Add: \"Freeze is blocked until RF10's rotated-key same-key replay is recorded SANDBOX PASS. Charge retrieves in the SignalWorker use the same current-head rule as RD13.\""
+    },
+    {
+     "severity": "P2",
+     "where": "stripe-refund-v1 §6 RefundWorker pseudo-code (ListRefunds branch) and apply step 3",
+     "problem": "When a list=0 report arrives within 15 min of last_sent_at, apply treats it as a no-op ('the worker lists again after the gap'), but the pseudo-code has no snooze or re-list after the list record. The job can complete and leave the refund SUBMITTING with no review and capacity held.",
+     "fix": "After `0 → record via=list`, add \"if now < last_sent_at + 15 min: snooze until last_sent_at + 15 min + 5 s and list again; else complete\". RF06 asserts a second list call and REFUND_UNRESOLVED."
+    },
+    {
+     "severity": "P2",
+     "where": "stripe-refund-v1 §7.1 GET .../refunds, §4.4 table, §4.5 commerce_auth row",
+     "problem": "The merchant refund list has no SQL entry point, owner or auth rule in §4.4. The per-item `state` and `updated_at` derivation from columns (REQUESTED/SUBMITTING/PENDING/UNKNOWN when REFUND_UNRESOLVED is per attempt) is not defined, so the commerce_auth column grant cannot be checked for sufficiency.",
+     "fix": "Add a §4.4 row: \"`identity.read_merchant_refunds(hash,store,order) RETURNS jsonb` | 0062 | commerce_auth | runtime | `orders:read`, 0027 fresh-final-auth; state = REJECTED/FAILED/CANCELED/SUCCEEDED by fact precedence FAILED/CANCELED > SUCCEEDED; else PENDING if stripe_refund_id set; else UNKNOWN if first_sent_at set ∧ now ≥ resend_until; else SUBMITTING if first_sent_at set; else REQUESTED. updated_at = greatest(requested_at, first_sent_at, last_sent_at, pinned_at, max fact received_at)\", and add last_sent_at, pinned_at to the commerce_auth column list."
+    }
+   ]
+  },
+  "a2": {
+   "status": "DONE",
+   "summary": "I checked the round-2 P1 against the migrations and it holds. I fixed it in both contracts, set both status headers to \"DRAFT (amended round 2)\" and did not commit. What the reviewer reported: commerce_checkout_writer has no USAGE on identity or ops (0013:9, 0016:84; it owns checkout, 0013:5). commerce_auth has USAGE only on identity and control (0001:84) plus checkout, payments and fulfillment (0027:56). No policy existed on stripe_refunds or refund_facts for checkout_writer or integration_writer. payments.review_cases has FORCE RLS since 0018:115, and its SELECT policies cover only checkout_writer, runtime and auth (0018, 0027:70), so integration_writer reads zero rows and the RD9 gate fails open. The GUC-scoped checkout policy works: 0061 apply_stripe_observation and hosted_payment_view_v2 already set app.tenant_id and app.store_id. No finding was rebutted. Evidence label: DESIGN. `python3 scripts/check_packet.py` exited 0 (log at /tmp/claude-501/pc.log). Every RF and MF gate is still NOT_RUN.",
+   "resolved": [
+    "/Volumes/data/live_commerce_architecture_v1/contracts/stripe-refund-v1.md: new §4.5 row granting commerce_checkout_writer USAGE ON SCHEMA identity, ops, with line citations. The old 'exactly the 0060 grants' wording is corrected.",
+    "stripe-refund-v1 §4.5: new policies stripe_refund_checkout and refund_fact_checkout (0018 private_writer shape, scoped by GUCs), plus stripe_refund_integration (ALL, true), refund_fact_integration (SELECT) and review_integration_read on payments.review_cases (SELECT; 0061 stripe_*_integration shape).",
+    "stripe-refund-v1 §4.5: the integration_writer UPDATE row now points to the full §4.2 column set (suppressed_at etc.). Before, it said only signal_count, which contradicted §4.2 and the 'exact matrix' claim.",
+    "stripe-refund-v1 §4.2 RLS note: FORCE RLS needs an explicit policy for each role.",
+    "stripe-refund-v1 §4.5 and RF03 extended: USAGE and policies are checked by reading pg_namespace and pg_policies. Behaviour is checked through the real definers: with REFUND_HISTORY or CONFLICTING_REPORT present, mark_stripe_refund_sent returns CLOSED; on a clean attempt the second partial refund is not suppressed and returns SEND; the capacity sum sees existing refunds; the webhook commit increments signal_count.",
+    "/Volumes/data/live_commerce_architecture_v1/contracts/manual-fulfilment-v1.md §4 grants bullet: adds USAGE identity and ops for checkout_writer (now refund §4.5 rows 1-3) and `GRANT USAGE ON SCHEMA ops TO commerce_auth` (0063).",
+    "manual-fulfilment-v1 MF02 extended: USAGE and policy checks; record_manual_shipment succeeds through the real definer; export_unshipped_orders writes its audit row.",
+    "Round-2 finding maps added: stripe-refund-v1 §14 and manual-fulfilment-v1 §10."
+   ],
+   "not_resolved": [
+    "All RF and MF gates, including the extended RF03 and MF02, are NOT_RUN. The contracts are DESIGN only.",
+    "There is no round-2 review file under output/contract-review/, so the maps cite 'round-2 fresh review' without a path."
+   ],
+   "owner_or_integrator_questions": [
+    "The integration_writer policy on stripe_refunds is USING(true) WITH CHECK(true), the same shape as 0061, fenced by the op lease rather than GUCs. Should the next review confirm that is acceptable, or should it be narrowed to separate SELECT/UPDATE policies?"
+   ]
+  },
+  "r3": {
+   "verdict": "PASS_WITH_P2",
+   "findings": [
+    {
+     "severity": "P2",
+     "where": "manual-fulfilment-v1 §4 (A1) grants bullet, which says 'with RESTRICTIVE policies (tenant/store = GUCs, principal_id = app.principal_id)', compared with stripe-refund-v1 §4.5 row 3, which says 'RESTRICTIVE + permissive policies'",
+     "problem": "Round-2 P1 is FIXED (DESIGN; checked against 0001:84/104, 0013:5-9, 0016:84-95, 0018:92-132, 0027:56-70, 0060:45, 0061:386-412 and 902, post_river 0005:667-668, post_river 0012:364 where the webhook commit is owned by integration_writer). §4.5 now grants checkout_writer USAGE on identity and ops. It adds the checkout_writer and integration_writer policies on stripe_refunds and refund_facts, and integration_writer's review_cases SELECT policy. MF §4 gives commerce_auth USAGE on ops. RF03/MF02 now assert these through the real definers, including the REFUND_HISTORY/CONFLICTING_REPORT check that must return CLOSED and a second partial refund that must still SEND. The residual issue: the MF bullet describes the ops policies as RESTRICTIVE only. RESTRICTIVE policies with no permissive policy admit zero rows, so an implementer who works only from the MF text would make record_manual_shipment's replay and audit insert fail. No new P0 or P1 found.",
+     "fix": "In manual-fulfilment-v1 §4, change 'with RESTRICTIVE policies' to 'with the RESTRICTIVE + permissive policies of stripe-refund-v1 §4.5 row 3'."
+    },
+    {
+     "severity": "P2",
+     "where": "stripe-refund-v1 §4.5: rows 3 (ops policies) and 10 (commerce_auth USING(true) policies) have no policy names; the paragraph after the table says RF03/MF02 assert 'every policy by name, role, command and qual'. The same gap is in the manual-fulfilment-v1 §4 commerce_auth audit_events policy.",
+     "problem": "The gates require checking each policy by name, but several policies in the contract have no name. The test author would have to invent names, so the RF03/MF02 matrix is not fully fixed by the contract.",
+     "fix": "Give each of those policies a name in the contract, e.g. checkout_command_result_insert/select, checkout_audit_insert, auth_refund_read, auth_refund_fact_read, auth_export_audit."
+    },
+    {
+     "severity": "P2",
+     "where": "manual-fulfilment-v1 §4.1 identity.export_unshipped_orders",
+     "problem": "The commerce_auth audit_events INSERT policy checks tenant, store and principal against the app.* settings. The 0027 commerce_auth definers never call set_config: they rely on the caller's platform scope transaction (internal/platform/platform.go:518). The contract does not say which of the two sets the settings for export. If export runs outside a scoped transaction, the audit insert fails.",
+     "fix": "Say it explicitly. Either export sets app.tenant_id, app.store_id and app.principal_id from the resolve_access result before the insert (the record_manual_shipment pattern), or the Go caller must run it in platform scope, with MF02 covering the chosen path."
+    }
+   ]
+  }
+ },
+ "metaIntake": {
+  "a1": {
+   "status": "DONE",
+   "summary": "I amended /Volumes/data/live_commerce_architecture_v1/contracts/meta-claims-intake-v1.md to \"DRAFT (amended round 1)\". I checked every finding in output/contract-review/meta-intake-round1.json against migrations/, internal/ and the frozen contracts before changing anything. All 8 P1s and all 9 P2s are addressed. Three P2 fixes differ from what the reviewer proposed, with reasons in not_resolved. I also appended a clearly marked \"Amendment proposal (NOT APPROVED)\" section to /Volumes/data/live_commerce_architecture_v1/contracts/external-dispatcher-v1.md, which the dispatcher-hook finding (P1-4) requires. Evidence label: DESIGN only. All MCI gates are NOT_RUN. `python3 scripts/check_packet.py` exited 0 (PASS_PACKET_STRUCTURE_ONLY; log in the session scratchpad). No code, migrations or other contracts were edited. Nothing is committed. Rulings changed: IR-5 and IR-8 are marked \"Superseded by amendment\", and so is the O6 locale-selection clause. The duplicate \"## 14.\" heading is now \"## 15.\".",
+   "resolved": [
+    "P1-1 (confirmed: emit() keys comment events on payload_hash, and social.comment_events.comment_key is not unique): claims.meta_intake gets app_id/object/asset_id/comment_ref with UNIQUE(app_id,object,asset_id,comment_ref). Staging uses ON CONFLICT DO NOTHING and returns NULL for an already-staged comment. MCI05 now covers a different payload hash, the same IG comment arriving as both comment and live_comment, and a late A1 arriving after A1+3.",
+    "P1-2 (confirmed against meta-runtime-isolation-v1 lines 49-64 and 122-124): IR-5 is superseded. Intake is now a fenced poll (claims.lease_meta_intake with FOR UPDATE SKIP LOCKED, plus fail_meta_intake with backoff and FAILED after 10 attempts). It runs in a new cmd/claims-worker with a commerce_claims_intake pool and a commerce_worker dispatcher host. The consumer gets no River grant, and meta-worker is unchanged.",
+    "P1-3 (confirmed in 0028 line 173 and dispatcher.go:384/389): a source binds to provider facebook or instagram. The operation takes the binding's provider with actor_kind MERCHANT, and two routes are registered: (facebook|instagram, meta.private_reply, service).",
+    "P1-4 (confirmed: callbacks get no lease token and no DB handle; no cmd hosts NewDispatcher yet): §6.4 adds a LoadSecret/DispatchWithSecret hook, also proposed in external-dispatcher-v1.md. Check calls claims.check_meta_reply(op, link_hash) through a captured commerce_worker pool. A gate proves the Page token is never visible to Check or Reconcile.",
+    "P1-5 (confirmed: 72 h link CHECK in 0060, and runtime roles cannot SELECT token_hash): the request adds link_key_id (a key fingerprint, no key ring). check_meta_reply requires generation=1, a matching hash, and expiry more than 10 minutes away. deadline_at = least(occurred+7d-1h, link expiry-10min, received+15min for live). MCI07 adds rotate, release, expiring-link and key-change cases.",
+    "P1-6 (confirmed: live-broadcast-v1 line 50 says audience state is always UNKNOWN): an IG live reply now requires the session window to be OPEN at Check time and the send to happen within 15 minutes of delivery. This is recorded as a known limit.",
+    "P1-7: new §4.3 lists the exact privilege delta. It adds a link_system_issue INSERT-only policy under a system context that neither link_issue nor link_rotate can match, and an integration_writer INSERT policy on operations. It adds a restrictive policy so commerce_runtime cannot insert meta.private_reply, and identity.principal_holds owned by commerce_auth. Staging is split: meta_inbox.stage_claim_intake (owned by meta_writer) calls claims.insert_meta_intake (owned by claims_writer).",
+    "P1-8: new §4.4 lists every changed clause of the frozen claims contract: §1, §3, §3.1 RATE_LIMITED row plus CHECK, §3.2, §3.3, §4.3 BundleCreated and IngestMetaIntake, §6 system generation-1 row. IR-8 is superseded so the integrator records these at freeze.",
+    "P2 window intervals: maintained only by a trigger on live.claim_windows, backfilled in 0064, with an OPEN-at-migration case in MCI06.",
+    "P2 window check race: the interval is now selected after the window row is locked FOR SHARE. A future occurred_at is DROPPED, and 23514 marks the intake FAILED.",
+    "P2 Check errors: only a DB deny code maps to ErrPolicyDenied. Infrastructure errors follow the frozen UNKNOWN path (see not_resolved).",
+    "P2 abuse bounds: advisory locks for actor and session cap, counting on occurred_at, and a staging cap of 50,000 intake rows per source via a counter on claim_sources.",
+    "P2 comment id: a missing or malformed comment id now fails closed. Added U7: IG occurred_at is delivery time.",
+    "P2 semantic key: a partial global unique index on semantic_key for meta.private_reply. A conflict marks the intake FAILED instead of retrying (see not_resolved).",
+    "P2 MessageIntent: the request adds policy, message_type and takeover_generation. Capability is checked through the credential's scopes_attested in LoadSecret.",
+    "P2 cosmetics: renumbered the rulings section to §15. §7 now uses commerce_integration_writer as owner and commerce_meta_registrar for EXECUTE. Locale labels are zh-TW/zh-CN/en."
+   ],
+   "not_resolved": [
+    "P2 Check-error fix is partly wrong. The reviewer says the dispatcher 'retries within its budget'. In the frozen dispatcher (internal/integrations/core/dispatcher.go runOperation, the lines after invokeCheck), a Check error other than ErrPolicyDenied goes through completeAmbiguous('policy_check_failed'). That makes the operation UNKNOWN, and afterwards it can only be reconciled, never dispatched. The contract now says so and lists it as a known limit (the reply is not sent and ends as manual-required). Getting a real retry would need a dispatcher change, which is not proposed.",
+    "P2 actor-key fix ('meta-worker rejects K_actor == K_link') cannot be implemented. K_link lives only in cmd/claims-worker, K_actor only in meta-worker and the label key only in cmd/api, so no single process can compare them. MCI01 instead proves domain separation using equal key bytes.",
+    "P2 semantic-key fix 'INSERT … ON CONFLICT DO NOTHING' was not adopted. The River job is inserted before the operation, and the new deferred job-to-operation guard would reject a dangling job. A conflict is structurally impossible (one intake per comment globally, plus the restrictive runtime policy), so it is treated as an invariant breach and marks the intake FAILED(reply_key_conflict)."
+   ],
+   "owner_or_integrator_questions": [
+    "IR-12: approve the external-dispatcher-v1 LoadSecret/DispatchWithSecret hook (the Amendment proposal appended to that file), or require a dedicated Meta reply worker in the style of the Stripe payment-worker?",
+    "IR-13: cmd/claims-worker would be the first production host of the main-river external_operation_v1 dispatcher. Is any other main-river consumer planned? A missing route leaves other operations READY (dispatcher step 1).",
+    "O6: no store default locale exists in the schema, so the locale is chosen per claim source (reply_locale, default zh-TW). Accept this, or add a store locale column instead?"
+   ]
+  },
+  "r2": {
+   "verdict": "BLOCK",
+   "findings": [
+    {
+     "severity": "P1",
+     "where": "§4.3 (exact privilege delta) + §4.4 clause 4; users: §5.1 insert_meta_intake, §6.3 check_meta_reply, §4.4 clause 5 issue_system_link, §6.2 plan_claim_reply",
+     "problem": "Round-1 #7 is only partly fixed. KC03/MCI02 compare the matrix for equality, but as written it cannot work (DESIGN, checked against 0008/0060/0029). (a) insert_meta_intake runs in the meta consumer tx, which sets no app.tenant_id (consumer.go). It reads live.offers as commerce_claims_writer, and the only policy there is offer_writer_read, which is GUC-scoped. Result: zero rows, so every meta comment becomes UNKNOWN_KEYWORD. (b) check_meta_reply runs from the dispatcher's commerce_worker pool with no GUCs. It reads claims.links through link_writer_read (GUC-scoped), so it always returns `link_invalid` and every reply is BLOCKED_POLICY. It also reads live.claim_windows (`live_closed`), and claims_writer has no grant or policy there, so it fails with 42501, which becomes UNKNOWN policy_check_failed. (c) issue_system_link must read the ACCEPTED claims.events row, but claims_writer has no grant on claims.events. (d) Every `I`/`IS` policy calls claims.intake_scope(), which is REVOKEd from PUBLIC (§4.1), but no EXECUTE is granted to commerce_claims_intake or commerce_integration_writer, so every policy check fails with 42501. (e) Schema USAGE is missing everywhere, although frozen §3.2 lists USAGE as matrix rows: meta_writer→claims; integration_writer→claims, live; claims_intake→claims, live, integration, river; commerce_worker→claims; claims_writer→integration (0008 grants integration USAGE only to runtime/worker/integration_writer). (f) There are no rows for commerce_runtime on the new live.claim_sources table or for the unnamed §2 definer, and none for the storefront (origin_ref) and audit reads/inserts done by plan_claim_reply.",
+     "fix": "Add to §4.3 (and so to §4.4 clause 4): `commerce_claims_writer | live.offers | (existing cols) | + policy offer_system_read FOR SELECT USING (true)`; `commerce_claims_writer | claims.links | (existing) | + policy link_system_read FOR SELECT USING (true)`; `commerce_claims_writer | live.claim_windows | SELECT(tenant_id,store_id,session_id,state,generation) | window_system_read USING (true)`; `commerce_claims_writer | claims.events | SELECT(tenant_id,store_id,id,session_id,source_kind,source_event_id,outcome,bundle_id) | event_system_read USING (true)`; `commerce_claims_writer | integration schema | USAGE`; `commerce_claims_intake, commerce_integration_writer | functions | EXECUTE claims.intake_scope()`; `commerce_meta_writer | claims schema | USAGE`; `commerce_integration_writer | claims, live schemas | USAGE`; `commerce_claims_intake | claims, live, integration, river schemas | USAGE`; `commerce_worker | claims schema | USAGE`. Add rows for commerce_runtime on live.claim_sources (SELECT S; writes only via a named definer `live.put_claim_source(...)`, owner commerce_claims_writer, EXECUTE commerce_runtime) and for plan_claim_reply's storefront/audit objects. Add to §4.4: \"§3.3 'every statement filters app.tenant_id/app.store_id': for insert_meta_intake, check_meta_reply, issue_system_link and intake_scope, the filter is the explicitly passed or derived tenant/store (these run without merchant or buyer GUCs); the USING(true) system policies apply only to claims_writer, which has no login.\""
+    },
+    {
+     "severity": "P1",
+     "where": "§4 claims.meta_intake `UNIQUE (app_id, object, asset_id, comment_ref)`; §6.1 semantic_key `sha256(app_id|object|asset_id|comment_ref)`; §3 actor key tuple incl. app_id",
+     "problem": "The claim of 'one intake per Meta comment, globally' is false. meta_inbox.routes is UNIQUE(app_id,object,asset_id) (0028), and asset_owners PK (object,asset_id) lets several apps route the same Page or IG account. A comment id is a global Graph id, so when two apps are subscribed to one asset, the same comment is delivered twice with different app_id. That gives two intakes, two claims events, two bundles (actor_key includes app_id), and two reply operations whose semantic keys differ, so the global partial unique index does not catch them. This breaks §6.1 ('at most one private reply per Meta comment, forever') and 架构 §10.1/§11.1. MCI05 does not cover it.",
+     "fix": "Remove app_id from all three keys. In §4: `UNIQUE (object, asset_id, comment_ref)` and `ON CONFLICT (object, asset_id, comment_ref) DO NOTHING` in §5.1. In §6.1: `semantic_key = \"mpr:\" + hex(sha256(object|asset_id|comment_ref))[:48]`. In §3: `tupleHash(\"meta-claim-actor/v1\", object, asset_id, from.id)`. Keep app_id only as a column. In MCI05 add: \"same comment id delivered through two apps routed to one asset → one intake, one claims event, one operation\"."
+    },
+    {
+     "severity": "P1",
+     "where": "§5.3 step 3 + §6.2 ('binding/version = source binding (must be enabled and equal)') + §5.3 error mapping",
+     "problem": "A failed reply precondition destroys the claim. plan_claim_reply runs in the claim-apply tx. If the source's binding is disabled or its semantic_version has moved on (the merchant re-registers the route during a live session; claim_sources.binding_version is fixed at create), or the source principal's membership is gone (the FK on operations/links fails with 23503), the whole tx rolls back. The intake then goes FAILED (22023 is final; 23503 is not mapped). The buyer's claim is lost permanently, even though the reply is optional and the dispatcher's final gate re-checks the binding anyway. The Go River job is also inserted before the plan call, so a 'skip' path would trip the §5.4 deferred trigger.",
+     "fix": "Replace the §6.2 precondition sentence with: \"Before inserting the River job, Go calls `integration.claim_reply_plannable(p_intake uuid) RETURNS text` (definer, owner commerce_integration_writer, EXECUTE commerce_claims_intake). It returns 'OK' or a fixed skip code (binding_disabled, binding_changed, principal_inactive, no_credential). On a skip code there is no job, link or operation; the claim commits, and an audit row `claim_reply_skipped:<code>` is written. plan_claim_reply is called only after 'OK', and a precondition that changes between the two calls cannot occur because the source row is read FOR SHARE.\" Add 23503 → final to the §5.3 error list, and add to MCI07: \"binding version bump / disable before apply → claim ACCEPTED, no operation\"."
+    },
+    {
+     "severity": "P2",
+     "where": "§5.4 post-River 0014 guards",
+     "problem": "(a) The BEFORE INSERT guard uses `pg_has_role(session_user,'commerce_claims_intake','MEMBER')` without the superuser exclusion that post_river/0003 guard_job_family uses (pg_has_role is always true for a superuser). Superuser/owner inserts of other kinds therefore get 22023, which breaks existing tests (expiry_runtime_test.go:366 'foreign_v1', meta_inbox_queue_test.go:131). (b) The deferred constraint trigger applies to every external_operation_v1 insert. expiry_runtime_test.go:331 inserts one with '{}' and no operation row, so it would fail at COMMIT. MCI10 requires these tests to stay unchanged.",
+     "fix": "(a) Change the condition to `pg_has_role(session_user,'commerce_claims_intake','MEMBER') AND NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=session_user AND rolsuper)`. (b) Make the deferred check fire only for rows inserted by a non-superuser member of commerce_claims_intake (the same condition, evaluated in the trigger body; return NULL otherwise). Also replace 'holds for the existing merchant Plan too' with 'applies only to intake-login inserts'."
+    },
+    {
+     "severity": "P2",
+     "where": "§3 actor key (K_actor 'loaded only by the meta-worker consumer') vs Header 'Unchanged: meta-runtime-v1' and §5.3 'meta-worker is unchanged'",
+     "problem": "meta-runtime-v1 freezes the meta-worker env table (MR01 'strict env'), and it has no COMMERCE_CLAIMS_ACTOR_KEY row. The behaviour when the key is absent or invalid (worker refuses to start, or claims staging is disabled) is unspecified.",
+     "fix": "Add meta-runtime-v1 to Amends: \"env row `COMMERCE_CLAIMS_ACTOR_KEY`: absent → claim staging disabled (the consumer never calls stage_claim_intake; the social fact is unchanged); present → canonical padded base64 of 32 non-zero bytes, else startup fails; redacted in every formatter; MR01 extended.\" Remove 'meta-worker is unchanged'."
+    },
+    {
+     "severity": "P2",
+     "where": "§5.1 first-wins dedup + §6.2 `live_media` + §6.3 `live_closed`",
+     "problem": "Dedup keeps the first delivery. If an IG live comment arrives first as `instagram_comment`, the intake gets live_media=false. The reply then skips the 15-minute deadline and the window-OPEN check, and may be sent after the broadcast. Meta refuses it, and before U3 that becomes UNKNOWN/manual-required.",
+     "fix": "\"live_media = (kind='instagram_live_comment' OR value.media.media_product_type='LIVE')\" computed in the consumer and staged; a later delivery of the other kind never downgrades it. Add an MCI05 case: `comments` first, then `live_comments` → live_media=true."
+    },
+    {
+     "severity": "P2",
+     "where": "§5.3 error path `claims.fail_meta_intake(intake, code, final)`",
+     "problem": "It runs in a separate tx after the rollback, when the row is unleased and due. Another goroutine can lease and APPLY the row first. fail_meta_intake could then overwrite APPLIED with FAILED or bump attempts on a finished row.",
+     "fix": "Add: \"fail_meta_intake updates only `WHERE id=p_intake AND state='PENDING' AND lease_xid IS DISTINCT FROM <any live xact>` (the row is locked FOR UPDATE NOWAIT; 55P03 or a non-PENDING row → no-op).\""
+    },
+    {
+     "severity": "P2",
+     "where": "§4.2 session cap",
+     "problem": "'Per session ≤5000 bundles … over either bound → RATE_LIMITED' is ambiguous. Read literally, once the cap is reached, existing buyers' updates to their own bundles are rejected too.",
+     "fix": "\"The session cap applies only when this command would insert a new bundle; updates to an existing bundle are bounded only by the per-actor rate.\""
+    },
+    {
+     "severity": "P2",
+     "where": "§5.4 last bullet `xmin = pg_current_xact_id()`",
+     "problem": "There is no xid = xid8 operator, so the expression fails with 42883.",
+     "fix": "Use `river_job.xmin = pg_current_xact_id()::xid`."
+    }
+   ]
+  },
+  "a2": {
+   "status": "DONE",
+   "summary": "I amended /Volumes/data/live_commerce_architecture_v1/contracts/meta-claims-intake-v1.md for round 2. The status header now reads DRAFT (amended round 2). Nothing is committed. Evidence label is DESIGN; every gate is still NOT_RUN. I checked all three P1 findings against migrations 0001, 0008, 0020, 0028 and 0060, plus consumer.go and dispatcher.go, and all three hold. I fixed their root causes, with two rebuttals and one deliberate deviation. `python3 scripts/check_packet.py` exited 0. A memory was stored (claim_type decision), but the store call returned queued with no memory_id, so it is not confirmed.",
+   "resolved": [
+    "P1 privilege matrix (a)-(e), verified. The consumer tx sets only timeout GUCs. The dispatcher sets none. 0060's claims_writer policies on live.offers and claims.links are GUC-scoped. claims_writer has no grant on claims.events or claim_windows. 0008 grants integration USAGE only to runtime/worker/integration_writer, and 0028 gives meta_writer no claims USAGE. Fix in §4.3: new shorthands G, M and NOGUC. claims_writer gets offer_system_read and link_system_read (both NOGUC), window_system_read (NOGUC) and event_system_read (G AND SYSTEM, because the intake tx sets GUCs to the leased scope). claims_writer also gets integration and meta_inbox USAGE. EXECUTE on claims.intake_scope() goes to claims_intake and integration_writer. Every schema USAGE row the finding lists is added. New §4.4 clause 9 amends the claims §3.3 'every statement filters app.tenant_id' rule; three of the definers (insert_meta_intake, check_meta_reply, lease_meta_intake) now raise 22023 if any app.* GUC is set, i.e. if not NOGUC.",
+    "Deliberate deviation from the reviewer's fix: I used NOGUC (all four app.* GUCs unset) instead of USING(true). This way the new policies never apply inside buyer or merchant transactions, so the existing 0060 definers keep their GUC-scoped RLS defense-in-depth.",
+    "P1 (f): the unnamed §2 definer is now live.put_claim_source(...) (owner commerce_claims_writer, EXECUTE commerce_runtime only, M guard, principal_holds check, version CAS). commerce_runtime can SELECT live.claim_sources (G) and has no write grant. put_claim_source's reads are added: meta_inbox.routes (no RLS), integration.bindings and meta_page_heads (both M). plan_claim_reply gets rows for control.storefront_publications and storefront_domains (I), ops.audit_events INSERT with a fixed action list, and USAGE on claims, live, control and ops.",
+    "P1 app_id keys, verified: 0028 routes are UNIQUE(app_id,object,asset_id) and asset_owners has PK (object,asset_id). app_id is removed from the meta_intake UNIQUE, the ON CONFLICT target, the semantic_key and the actor tuple; it stays as a 'first delivering app' column. Added U8 (UNKNOWN): whether from.id is app-scoped. MCI01 and MCI05 now include the two-apps-on-one-asset case.",
+    "P1 reply precondition destroying the claim, verified: SetBindingEnabled bumps semantic_version while claim_sources.binding_version stays fixed. New integration.claim_reply_plannable(uuid) is called before the River job. It locks the binding, then the source, FOR SHARE (matching the consumer's lock order, §9 updated). It returns OK or one of source_off, binding_disabled, binding_changed, no_storefront. On a skip it writes an audit row claim_reply_skipped:<code>, creates no job, link or operation, and lets the claim commit. §5.3 error mapping gains 23503 and 42501 as final, and any other SQLSTATE is non-final up to the 10-attempt cap. MCI07 and §14 known limits are updated."
+   ],
+   "not_resolved": [
+    "Rebuttal, partial: the finding says 23503 comes from a deleted source-principal membership. No migration grants DELETE on identity.memberships, so that path cannot happen. 23503 is still mapped to final defensively.",
+    "Rebuttal, partial: I did not add principal_inactive or no_credential as plan-time skips. Those cases already produce a visible BLOCKED_POLICY operation at dispatch (Check returns principal_revoked, LoadSecret returns credential_unavailable), which gives the merchant better evidence than an audit-only skip.",
+    "All MCI gates are still NOT_RUN (DESIGN only)."
+   ],
+   "owner_or_integrator_questions": [
+    "Do you accept NOGUC-scoped system policies in place of the reviewer's USING(true)? It is stricter and keeps the 0060 buyer/merchant RLS defense-in-depth.",
+    "Should the owner of live.put_claim_source be commerce_claims_writer (as drafted; this adds cross-domain reads of meta_inbox.routes, bindings and page heads) or commerce_integration_writer?",
+    "Is the binding_changed skip policy right? A SetBindingEnabled toggle disarms replies until the merchant re-saves the source. The alternative is to use the current enabled binding version at plan time."
+   ]
+  },
+  "r3": {
+   "verdict": "BLOCK",
+   "findings": [
+    {
+     "severity": "P1",
+     "where": "§4.3 rows `commerce_claims_intake | river.river_job | SELECT, INSERT; sequence USAGE` and `commerce_integration_writer | river.river_job | SELECT (existing where present)`; §5.4 guard; §6.2 xmin check (DESIGN, checked against river v0.40.0 riverpgxv5 river_job.sql:314-320, migrations/migrate.go:118-120, post_river/0005:674)",
+     "problem": "Round-2 fixed items: #1 (NOGUC/system policies, intake_scope EXECUTE, schema USAGE, storefront/audit/runtime rows), #2 (app_id removed from all three keys, MCI05 case added) and #3 (claim_reply_plannable before the River job, 23503 final, MCI07 skip cases; the principal-FK rebuttal holds because no migration grants DELETE on identity.memberships). The matrix is still not executable for the River job, though. (a) River InsertTx always emits `ON CONFLICT (unique_key) DO UPDATE SET kind = EXCLUDED.kind`, and PostgreSQL requires UPDATE(kind) for that statement even when there is no conflict. That is why migrate.go gives commerce_runtime UPDATE(kind) and 0003 gives meta_ingress the same. commerce_claims_intake gets only SELECT and INSERT, so every reply-bearing claim fails with 42501. (b) plan_claim_reply (owner commerce_integration_writer) must read river.river_job to check `xmin = pg_current_xact_id()`. commerce_integration_writer has no SELECT on river.river_job: it only ever had UPDATE(queue), which post_river 0005 revoked. So 'existing where present' is empty and this also fails with 42501. §5.3 maps 42501 to final, so the intake goes FAILED and the buyer's claim is lost permanently. This is the case §6.2 says can never happen.",
+     "fix": "§4.3: `commerce_claims_intake | river.river_job | SELECT, INSERT, UPDATE(kind); USAGE on river.river_job_id_seq`. `commerce_integration_writer | river.river_job | SELECT` (table level, because xmin is read). Make the §5.4 guard `BEFORE INSERT OR UPDATE` and reject any UPDATE that changes kind/args/queue/unique_key for the intake login. Name the owner of the §5.4 deferred trigger function (commerce_integration_writer, SECURITY DEFINER; it reads integration.operations through worker_operation_read). Add to MCI04: a real River InsertTx from the intake login succeeds, and a kind UPDATE from that login is rejected."
+    },
+    {
+     "severity": "P1",
+     "where": "§4.4 (the 'exact clause list') vs frozen live-keyword-claims-v1 §3.2 closing paragraph; tests/foundation/live_claims_schema_test.go KC03 subtest `foreign-roles-denied`",
+     "problem": "The frozen §3.2 says 'No privilege for … worker, any `commerce_meta_*` … role' and 'No policy references another claims table (no subquery)'. The amendment grants commerce_worker EXECUTE check_meta_reply plus claims USAGE, and grants commerce_meta_writer EXECUTE insert_meta_intake plus claims USAGE. Its `I`/`IS` policies run `(SELECT … FROM claims.intake_scope())`, and that function reads claims.meta_intake. §4.4 amends neither sentence. §4.1 claims that 'none … stays true for tables', but that is not the frozen wording. The existing KC03 subtest `foreign-roles-denied` requires 42501 for commerce_integration_writer on `SELECT 1 FROM claims.events`. The new column SELECT grant makes that query succeed, so KC03 fails. MCI10 requires KC01–15 to pass, and AGENTS.md forbids rewriting a gate to make it pass, so the implementer cannot resolve this without an integrator clause.",
+     "fix": "Add §4.4 clause 10, which replaces the §3.2 closing sentence with: 'No privilege for PUBLIC, commerce_buyer_issuer, commerce_identity, checkout, hosted, commerce_media_* roles; commerce_worker, commerce_meta_writer, commerce_meta_consumer and commerce_integration_writer hold exactly the meta-claims-intake-v1 §4.3 rows; claims-table policies may call claims.intake_scope() (definer, reads only claims.meta_intake through a non-recursive LEASED policy); no other cross-table reference.' Also state that KC03 `foreign-roles-denied` drops commerce_integration_writer for claims.events SELECT, and that the drop is recorded at freeze as part of the amendment, not by the implementer."
+    },
+    {
+     "severity": "P2",
+     "where": "§4.3 row `commerce_integration_writer | claims.meta_intake, claims.events, live.claim_sources | SELECT (fixed columns used by §6.2)`",
+     "problem": "The column list is not enumerated, so the KC03/MCI02 equality comparison has nothing exact to compare against.",
+     "fix": "List the columns: meta_intake(tenant_id,store_id,id,session_id,source_id,platform,object,asset_id,comment_ref,occurred_at,received_at,applied_event_id,lease_xid); events(tenant_id,store_id,id,session_id,source_kind,source_event_id,outcome,bundle_id); claim_sources(tenant_id,store_id,id,session_id,active,private_reply,binding_id,binding_version,principal_id,reply_locale,asset_id,platform)."
+    },
+    {
+     "severity": "P2",
+     "where": "§4.3 `commerce_auth | owns identity.principal_holds(...)`",
+     "problem": "The function is not declared SECURITY DEFINER. If it is created as INVOKER, callers running as commerce_claims_writer (check_meta_reply, put_claim_source) have no SELECT on identity.memberships/store_grants and get 42501. In check_meta_reply that becomes UNKNOWN policy_check_failed, so every reply is spent.",
+     "fix": "State: 'STABLE SECURITY DEFINER, search_path=pg_catalog, REVOKE PUBLIC, EXECUTE commerce_claims_writer only.'"
+    },
+    {
+     "severity": "P2",
+     "where": "§6.2 'the locks held since then keep the checked rows unchanged'",
+     "problem": "The `no_storefront` precondition (control.storefront_publications/domains) is read without a lock. A domain deactivated between claim_reply_plannable and plan_claim_reply, in the same READ COMMITTED tx, raises 22023, which is final, and the claim is lost. The window is narrow, but the §6.2 guarantee is false as written.",
+     "fix": "Have claim_reply_plannable return origin_ref alongside 'OK' (or lock the domain row FOR SHARE), and pass it to plan_claim_reply without re-validating it."
+    },
+    {
+     "severity": "P2",
+     "where": "§6.2 deadline_at `link expires_at − 10 min`; §4.4 clause 5 issue_system_link signature",
+     "problem": "plan_claim_reply has no SELECT on claims.links, and issue_system_link's return type is unspecified. The link's expires_at is therefore unavailable when deadline_at is computed.",
+     "fix": "Declare `claims.issue_system_link(uuid,bytea) RETURNS timestamptz` (expires_at)."
+    },
+    {
+     "severity": "P2",
+     "where": "§13 IR-9",
+     "problem": "The stale text 'issue_system_link (generation 0 only)' contradicts §4.3 `link_system_issue … generation=1` and §4.4 clause 5.",
+     "fix": "Change it to 'generation 1 only, INSERT-only'."
+    }
+   ]
+  }
+ }
+}

@@ -1,4 +1,9 @@
-// Package inventory implements ledger-backed physical inventory commands.
+// Package inventory owns ledger-backed physical inventory commands: warehouses, on-hand adjustment,
+// reserve and release, and the pure allocation planner.
+//
+// It never writes a balance directly (every change is an append to inventory.ledger, whose trigger
+// is the sole balance writer), never decides payment or refund policy, and never restocks on its own
+// authority: callers supply the evidence-bearing command.
 package inventory
 
 import (

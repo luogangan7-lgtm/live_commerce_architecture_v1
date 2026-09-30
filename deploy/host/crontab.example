@@ -1,0 +1,20 @@
+# File: deploy/host/crontab.example -> install as /etc/cron.d/live-commerce (root, 0644)
+# Purpose: schedule for backups and health checks (deploy-design §15, §16.3).
+# Runs as/in: host cron as root, from the deploy checkout (adjust /opt/live-commerce to your path).
+# Reads env: /etc/live-commerce/compose.env (loaded by each script via lib.sh).
+# Reads secrets: none here; pg-ops reads pg_superuser_password inside its container.
+# Used by: operators (docs/runbooks/deploy.md §主机准备, backup-restore.md §计划).
+# Depends on: deploy/scripts/{pg-ops,watchdog}.sh; cron MAILTO or journald for failure output.
+# Status: DESIGN (review only; not executed by smoke). Odd minutes avoid the :00 thundering herd.
+# Change rules: keep backups off the watchdog minute; watchdog exit != 0 is the alert signal.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+MAILTO=root
+
+# Nightly logical backup (retention 14 days, LC_DUMP_RETENTION_DAYS).
+17 2 * * *   root  /opt/live-commerce/deploy/scripts/pg-ops.sh backup --tag nightly >>/var/log/live-commerce-backup.log 2>&1
+# Weekly base backup for PITR + WAL pruning (keeps 2 bases, LC_BASE_KEEP).
+23 3 * * 0   root  /opt/live-commerce/deploy/scripts/pg-ops.sh basebackup >>/var/log/live-commerce-backup.log 2>&1
+# Health checks W1-W9 every 5 minutes; the full report is mailed (MAILTO) only on failure.
+*/5 * * * *  root  /opt/live-commerce/deploy/scripts/watchdog.sh >/var/log/live-commerce-watchdog.last 2>&1 || cat /var/log/live-commerce-watchdog.last
+# Off-host copy of /var/backups/live-commerce is owner decision O3 (encrypted; new dependency).

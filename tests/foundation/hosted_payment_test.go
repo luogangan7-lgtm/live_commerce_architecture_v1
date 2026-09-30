@@ -463,7 +463,7 @@ func TestBuyerPaymentHostedAdmissionDriftBeforePrepare(t *testing.T) {
 			mustExec(t, h.f.owner, `UPDATE payments.method_versions SET visible=false WHERE connection_id=$1`, h.account)
 		},
 		"qualification-revoked": func(t *testing.T, h hpHarness) {
-			mustExec(t, h.f.owner, `UPDATE payments.account_qualifications SET revoked_at=clock_timestamp() WHERE id=$1`, h.proof)
+			qualExec(t, h.f.owner, `UPDATE payments.account_qualifications SET revoked_at=clock_timestamp() WHERE id=$1`, h.proof)
 		},
 		"credential-rotated": func(t *testing.T, h hpHarness) {
 			hpRotateFixtureHead(t, h)

@@ -1,0 +1,11 @@
+MUTATION internal/payments/stripewebhook/handler.go: !found || m.Profile != h.in.profile -> !found :: 3 FAIL lines
+MUTATION internal/payments/stripewebhook/handler.go: if len(signatures) != 1 { -> if false { :: 2 FAIL lines
+MUTATION internal/payments/stripeadmin/registrar.go: CredentialVersion: expectedVersion + 1} -> CredentialVersion: expectedVersion} :: 3 FAIL lines
+MUTATION internal/payments/stripeadmin/registrar.go: if err := r.verify(bounded, secretKey, accountID); err != nil {
+		return "", err
+	} -> if false {
+		return "", nil
+	} :: 2 FAIL lines
+MUTATION internal/integrations/psp/stripe/probe.go: const probeLifetime = 31 * time.Minute -> const probeLifetime = 30 * time.Minute :: 3 FAIL lines
+MUTATION cmd/api/stripe_webhook.go: strings.HasPrefix(path.Clean(r.URL.Path), "/v1/stripe") -> false :: 2 FAIL lines
+MUTATION cmd/payment-worker/main.go: if config.profile != "SANDBOX" { -> if false { :: 3 FAIL lines

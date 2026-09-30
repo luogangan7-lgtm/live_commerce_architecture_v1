@@ -11,7 +11,7 @@ import (
 
 func socialFixture(t *testing.T, object, asset, source string) (payloadContext, Event, []byte) {
 	t.Helper()
-	unit, err := parseStrict([]byte(source))
+	unit, err := ParseStrict([]byte(source))
 	if err != nil {
 		t.Fatal(err)
 	}

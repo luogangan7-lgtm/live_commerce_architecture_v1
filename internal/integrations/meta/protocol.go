@@ -1,5 +1,11 @@
-// Package meta admits signed Meta webhook events. The caller must atomically
-// persist the complete batch and its jobs before acknowledging a delivery.
+// Package meta owns admission of signed Meta webhook events: HMAC verification, strict payload
+// parsing (ParseStrict, the repo's duplicate-member-rejecting JSON entry point), normalization, the
+// encrypted inbox, the River consumer and claim-intake staging. The caller must atomically persist
+// the complete batch and its jobs before acknowledging a delivery.
+//
+// It never calls graph.facebook.com or sends a reply (internal/integrations/metareply owns private
+// replies), never imports internal/claims (only the pure claims/grammar parser), and never trusts an
+// unsigned body. Meta docs quoted in this package carry their retrieval date at the use site.
 package meta
 
 import (
@@ -114,7 +120,7 @@ func (v *Verifier) Verify(raw []byte, signature string) (Batch, error) {
 	if !hmac.Equal(mac.Sum(nil), want) {
 		return Batch{}, ErrSignature
 	}
-	root, err := parseStrict(raw)
+	root, err := ParseStrict(raw)
 	if err != nil {
 		return Batch{}, ErrJSON
 	}
@@ -126,10 +132,13 @@ func (v *Verifier) Verify(raw []byte, signature string) (Batch, error) {
 	return b, nil
 }
 
+// ParseStrict decodes one JSON object rejecting duplicate member names (including escaped
+// aliases), invalid UTF-8, unpaired surrogates and trailing data; numbers stay json.Number.
+// It is the repo's one strict JSON entry point: metareply's keyring loader uses it too (ruling n).
 // A token walk catches decoded duplicate names, including escaped aliases.
 // json.Decoder replaces invalid UTF-8 and unpaired UTF-16 surrogates with
 // U+FFFD, losing payload identity, so validate both before decoding.
-func parseStrict(raw []byte) (map[string]any, error) {
+func ParseStrict(raw []byte) (map[string]any, error) {
 	if !utf8.Valid(raw) || !pairedSurrogates(raw) {
 		return nil, ErrJSON
 	}

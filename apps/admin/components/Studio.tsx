@@ -117,6 +117,8 @@ export function Studio({ locale, stores, store, scene, cursor, initialError }: {
   const [pageReload, setPageReload] = useState(0);
   const [detailReload, setDetailReload] = useState(0);
   const [pinnedScene, setPinnedScene] = useState({ scope: "", id: "" });
+  // Last media_enabled the API reported (GET detail). Hidden until the API says media is on (R1 ruling G2).
+  const [mediaOn, setMediaOn] = useState(false);
   const pageEpoch = useRef(0);
   const detailEpoch = useRef(0);
   const actionEpoch = useRef(0);
@@ -140,6 +142,7 @@ export function Studio({ locale, stores, store, scene, cursor, initialError }: {
   const currentDetail = detail.key === detailKey && (!cookie.current || csrfCookie() === cookie.current)
     ? detail : { key: detailKey, status: "initial" as Status, data: null };
   const shown = newMode ? null : currentDetail.data;
+  useEffect(() => { if (currentDetail.data) setMediaOn(currentDetail.data.media_enabled); }, [currentDetail.data]);
   const formDirty = newMode ? (form.title !== "" || form.scheduled !== "" || form.aspect !== blank.aspect) :
     !!shown && (form.id !== shown.draft.session_id || form.title !== shown.draft.title ||
       form.scheduled !== utcMinute(shown.draft.scheduled_at) || form.aspect !== shown.draft.aspect_ratio);
@@ -584,6 +587,13 @@ export function Studio({ locale, stores, store, scene, cursor, initialError }: {
   const canStart = !!shown?.can_manage && shown.draft.state === "DRAFT" && !!prepared && preparedCurrent && !attempt && !formDirty && !actionBlocked;
   const canStop = !!shown?.can_manage && !!attempt && !attempt.stop_requested && !attempt.escalated && attempt.resource_state !== "TERMINAL" && !actionBlocked;
   const canEdit = !recoveryElsewhere && !recoveryGuard && (newMode || (!!shown?.can_manage && shown.draft.state === "DRAFT"));
+  // Planning-only Studio (media_enabled=false) has no rehearsal column; save errors stay visible below the editor.
+  const actionAlert = actionError && <div role="alert" className="studio-action-error">
+    <p>{actionMessage(actionError)}</p>
+    {actionError === "uncertain" && pending.current && <button type="button" disabled={busy}
+      onClick={() => { const value = pending.current; if (value) void perform(value.action, value.body, value.sessionID, value); }}>
+      {c.retrySame}</button>}
+  </div>;
 
   return <WorkspaceFrame locale={locale} storeName={store?.name ?? c.noStore} active="live" onBeforeNavigate={() => mayLeave(true)}>
     <div className="studio-page" data-testid="merchant-studio">
@@ -593,6 +603,9 @@ export function Studio({ locale, stores, store, scene, cursor, initialError }: {
           {stores.length > 1 && <label>{c.store}<select value={storeID} onChange={(event) => {
             previous.current = []; navigate(event.target.value, "", "");
           }}>{stores.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
+          {shown && <button type="button" className="studio-refresh" data-testid="studio-open-claims"
+            onClick={() => { if (mayLeave(true)) router.push(`/${locale}/studio/claims?store=${encodeURIComponent(storeID)}&scene=${encodeURIComponent(shown.draft.session_id)}`); }}>
+            {c.claims}</button>}
           <button type="button" className="studio-refresh" onClick={refresh}>{c.refresh}</button>
         </div>
       </header>
@@ -604,7 +617,7 @@ export function Studio({ locale, stores, store, scene, cursor, initialError }: {
           {locale === "zh-CN" ? "返回待处理场次" : locale === "zh-TW" ? "返回待處理場次" : "Return to session"}
         </button>
       </p>}
-      <div className="studio-surface">
+      <div className={`studio-surface${mediaOn ? "" : " studio-planning-only"}`}>
         <section className="studio-scenes" aria-label={c.scenes}>
           <button type="button" className="primary studio-new" disabled={recoveryGuard || recoveryElsewhere || !storeID || busy || actionError === "uncertain" || currentPage.status === "forbidden" || shown?.can_manage === false}
             onClick={newScene}>＋ {c.newScene}</button>
@@ -675,8 +688,9 @@ export function Studio({ locale, stores, store, scene, cursor, initialError }: {
           </> : currentDetail.status === "loading" && currentPage.status === "ready" ?
             <p className="studio-panel-message" role="status">{c.detailLoading}</p> :
             <p className="studio-panel-message" role="status">{selectedID ? statusText(currentDetail.status) : c.select}</p>}
+          {!mediaOn && actionAlert}
         </section>
-        <aside className="studio-status" aria-label={c.rehearsal}>
+        {mediaOn && <aside className="studio-status" aria-label={c.rehearsal}>
           <div className="studio-status-title"><h2>{c.rehearsal}</h2><span>MOCK</span></div>
           <p className="studio-notice">{c.localOnly}</p>
           {shown ? <>
@@ -718,13 +732,8 @@ export function Studio({ locale, stores, store, scene, cursor, initialError }: {
               }}>{busy ? c.working : attempt ? c.stop : c.start}</button>
             {!shown.can_manage && <p className="studio-muted">{c.readOnly}</p>}
           </> : <p className="studio-panel-message">{newMode ? c.noPrepared : c.noAttempt}</p>}
-          {actionError && <div role="alert" className="studio-action-error">
-            <p>{actionMessage(actionError)}</p>
-            {actionError === "uncertain" && pending.current && <button type="button" disabled={busy}
-              onClick={() => { const value = pending.current; if (value) void perform(value.action, value.body, value.sessionID, value); }}>
-              {c.retrySame}</button>}
-          </div>}
-        </aside>
+          {actionAlert}
+        </aside>}
       </div>
     </div>
   </WorkspaceFrame>;

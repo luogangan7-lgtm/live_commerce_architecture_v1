@@ -1,4 +1,9 @@
-// Package catalog implements the merchant-scoped catalog transaction slice.
+// Package catalog owns the merchant-scoped catalog transaction slice: products, SKUs, price history,
+// the wide product/SKU ledger read projection (contracts/admin-ledger-v1.md) and the purchase-entry
+// read.
+//
+// It never writes stock (internal/inventory owns balances and the ledger), never opens a transaction
+// (callers pass one from platform.WithScope), and never trusts a caller-supplied tenant or store.
 package catalog
 
 import (

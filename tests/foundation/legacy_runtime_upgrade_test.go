@@ -45,6 +45,16 @@ func lriPre0032Fixture(t *testing.T) *testFixture {
 	if miCount(t, f.owner, `SELECT count(*) FROM public.lc_schema_migrations WHERE version IN ('0032_legacy_river_isolation.sql','post_river/0005_legacy_river_isolation.sql')`) != 0 {
 		t.Fatal("historical fixture crossed 0032 boundary")
 	}
+	// taiwan-cvs-logistics-v1 (post_river/0017): the current checkout Go calls the 10-argument begin_hold, which this old boundary
+	// (8-argument 0013 body, no CVS schema) cannot host. A SECURITY INVOKER shim keeps the card-order path of these historical
+	// fixtures exercising the old body unchanged; the extra arguments carry nothing an old schema could act on and the two result keys are the card-order constants.
+	// post_river/0017 drops this shim (DROP FUNCTION IF EXISTS) before creating the real function, so migrations.Apply upgrades these fixtures.
+	mustExec(t, f.owner, `CREATE FUNCTION checkout.begin_hold(p_hash bytea,p_store uuid,p_key text,p_request_hash bytea,p_order uuid,
+	 p_snapshot jsonb,p_lines jsonb,p_job_id bigint,p_payment_environment text,p_payment_mode text) RETURNS jsonb
+	 LANGUAGE sql AS $$ SELECT checkout.begin_hold(p_hash,p_store,p_key,p_request_hash,p_order,p_snapshot,p_lines,p_job_id)
+	 || jsonb_build_object('payment_mode','card','commercial_state','DRAFT') $$;
+	 REVOKE ALL ON FUNCTION checkout.begin_hold(bytea,uuid,text,bytea,uuid,jsonb,jsonb,bigint,text,text) FROM PUBLIC;
+	 GRANT EXECUTE ON FUNCTION checkout.begin_hold(bytea,uuid,text,bytea,uuid,jsonb,jsonb,bigint,text,text) TO commerce_checkout_runtime`)
 	runtime, err := platform.OpenPool(ctx, bcRole(t, f, "commerce_runtime"))
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +165,7 @@ func lriOldProfileQuery(t *testing.T, f *testFixture, profile string) pqFixture 
 	t.Helper()
 	p := psSetupItemsOn(t, f, 1, "river")
 	if profile == "SANDBOX" {
-		mustExec(t, f.owner, `UPDATE payments.account_qualifications SET proof_class='REAL_SANDBOX',evidence_ref='local synthetic qualification; no provider call' WHERE id=$1`, p.proof)
+		qualExec(t, f.owner, `UPDATE payments.account_qualifications SET proof_class='REAL_SANDBOX',evidence_ref='local synthetic qualification; no provider call' WHERE id=$1`, p.proof)
 	} else if profile == "LIVE" {
 		binding, account, proof := randomUUID(), randomUUID(), randomUUID()
 		ctx := context.Background()
@@ -361,6 +371,16 @@ func TestLegacyRuntimeIsolationPopulatedUpgrade(t *testing.T) {
 		t.Fatal("expected additive media identity", err)
 	}
 	business["integration.operations"] = expectedOperations
+	// Apply also includes 0072 (taiwan-cvs C4): checkout.orders gains payment_mode (default 'card') and collection_state (NULL); every
+	// historical order keeps all old values and acquires exactly those two keys.
+	var expectedOrders string
+	if err := f.owner.QueryRow(ctx, `SELECT coalesce(jsonb_agg(
+	 value || '{"payment_mode":"card","collection_state":null}'::jsonb
+	 ORDER BY (value || '{"payment_mode":"card","collection_state":null}'::jsonb)::text),'[]'::jsonb)::text
+	 FROM jsonb_array_elements($1::jsonb)`, business["checkout.orders"]).Scan(&expectedOrders); err != nil {
+		t.Fatal("expected additive CVS order columns", err)
+	}
+	business["checkout.orders"] = expectedOrders
 	// Apply also includes 0041's five nullable recovery event columns. Keep
 	// comparing every historical event value, with only these new keys NULL.
 	var expectedEvents string
@@ -578,6 +598,13 @@ func TestLegacyRuntimeIsolationUpgradeFailClosedRetry(t *testing.T) {
 	if rollbackErr != nil {
 		t.Fatal(rollbackErr)
 	}
+	// Cancellation closed the attempt's hijacked lock connection client-side,
+	// but its backend was still queued on the table lock; it only finishes its
+	// statement, aborts and releases session advisory lock 718020260920
+	// (migrations/migrate.go) when it exits after the rollback above. Observe
+	// that exit instead of retrying Apply, so the no-post check and the retry
+	// both run after the cancelled attempt has fully ended.
+	waitAdvisoryLockReleased(t, f.owner, "cancelled migration attempt still holds the migration advisory lock", 718020260920)
 	lriNoPost(t, f, sourceBeforeLock, queuesBeforeLock, "[]", "[]", paymentQueuesBeforeLock, expiryQueuesBeforeLock)
 	if err := migrations.Apply(ctx, f.owner); err != nil {
 		t.Fatal("corrected partial-native retry", err)

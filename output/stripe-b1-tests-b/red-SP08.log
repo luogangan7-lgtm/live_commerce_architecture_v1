@@ -1,0 +1,11 @@
+# RED proof SP08 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: worker credential loader substitutes an unregistered API key (per-account key isolation broken)
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP08HappyMock$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_flow_test.go:388: timeout waiting for session pinned: op state=UNKNOWN generation=6 last codes=[stripe_unavailable reconcile_claimed stripe_unavailable reconcile_claimed] fake requests=2
+--- FAIL: TestStripeSP08HappyMock (29.18s)
+FAIL
+FAIL	livecommerce/tests/foundation	29.921s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

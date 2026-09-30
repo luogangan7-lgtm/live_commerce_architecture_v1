@@ -24,6 +24,12 @@ type optionResponse struct {
 	NameHant          string `json:"name_hant"`
 	NameEN            string `json:"name_en"`
 	SortOrder         int    `json:"sort_order"`
+	// taiwan-cvs-logistics-v1 §5.1/§16.5: CVS rows only, omitted otherwise (unavailable rows carry available:false + reason).
+	PickupSelection string   `json:"pickup_selection,omitempty"`
+	PaymentModes    []string `json:"payment_modes,omitempty"`
+	StoreSearchURL  string   `json:"store_search_url,omitempty"`
+	Available       *bool    `json:"available,omitempty"`
+	Reason          string   `json:"reason,omitempty"`
 }
 
 type optionsResponse struct {
@@ -39,7 +45,8 @@ func projectOptions(page pagination.Page[checkout.Option]) optionsResponse {
 			Country: item.Country, Currency: item.Currency, DeliveryCode: item.DeliveryCode, Method: item.Method,
 			ServiceVersion: item.ServiceVersion, AllocationVersion: item.AllocationVersion,
 			DeliveryKind: item.DeliveryKind, Mode: item.Mode, NameHans: item.NameHans, NameHant: item.NameHant,
-			NameEN: item.NameEN, SortOrder: item.SortOrder,
+			NameEN: item.NameEN, SortOrder: item.SortOrder, PickupSelection: item.PickupSelection,
+			PaymentModes: item.PaymentModes, StoreSearchURL: item.StoreSearchURL, Available: item.Available, Reason: item.Reason,
 		})
 	}
 	return out
@@ -216,10 +223,14 @@ func projectDestination(destination storefront.Destination) destinationResponse 
 type checkoutResponse struct {
 	OrderID       string    `json:"order_id"`
 	HoldExpiresAt time.Time `json:"hold_expires_at"`
+	// §16.2: how the order is paid and its state at placement (pay_at_pickup orders are CONFIRMED with no payment step).
+	PaymentMode     string `json:"payment_mode"`
+	CommercialState string `json:"commercial_state"`
 }
 
 func projectCheckout(result checkout.Result) checkoutResponse {
-	return checkoutResponse{OrderID: result.OrderID, HoldExpiresAt: result.ExpiresAt}
+	return checkoutResponse{OrderID: result.OrderID, HoldExpiresAt: result.ExpiresAt,
+		PaymentMode: result.PaymentMode, CommercialState: result.CommercialState}
 }
 
 type orderQuoteResponse struct {
@@ -269,6 +280,13 @@ type orderResponse struct {
 	FulfillmentState string                `json:"fulfillment_state"`
 	HoldExpiresAt    *time.Time            `json:"hold_expires_at,omitempty"`
 	Snapshot         orderSnapshotResponse `json:"snapshot"`
+	// Shipment is always emitted, null unless the merchant's manual shipment head is SHIPPED
+	// (manual-fulfilment-v1 §5.2); checkout.Get reads it under buyer RLS without merchant-only columns.
+	Shipment *checkout.BuyerShipment `json:"shipment"`
+	// taiwan-cvs-logistics-v1 §5.3/§16: payment mode, pay-at-pickup collection state (null for card) and the current ECPay attempt.
+	PaymentMode     string                     `json:"payment_mode"`
+	CollectionState *string                    `json:"collection_state"`
+	CVSShipment     *checkout.BuyerCVSShipment `json:"cvs_shipment"`
 }
 
 func projectOrder(order checkout.Order) orderResponse {
@@ -276,7 +294,8 @@ func projectOrder(order checkout.Order) orderResponse {
 	destination := order.Snapshot.Destination
 	out := orderResponse{
 		OrderID: order.OrderID, CommercialState: order.CommercialState, FulfillmentState: order.FulfillmentState,
-		CartID: quote.CartID, CartVersion: quote.CartVersion,
+		CartID: quote.CartID, CartVersion: quote.CartVersion, Shipment: order.Shipment,
+		PaymentMode: order.PaymentMode, CollectionState: order.CollectionState, CVSShipment: order.CVSShipment,
 		Snapshot: orderSnapshotResponse{
 			Quote: orderQuoteResponse{
 				Currency: quote.Currency, Lines: projectQuoteLines(quote.Lines),

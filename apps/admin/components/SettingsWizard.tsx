@@ -1,5 +1,10 @@
 "use client";
 
+// Merchant settings wizard (approved A four-step sequence): BFF /api/stores/{store}/{provider-accounts,markets/...}
+// -> Go internal/httpapi settings routes. The merchant-arranged (manual) branch also hosts the logistics cards
+// (<LogisticsSettings>: BFF logistics/ecpay, logistics/ecpay/enabled, logistics/cvs-settings -> Go
+// internal/httpapi/cvs.go, taiwan-cvs-logistics-v1 §8/§16.5) in step 2, and its delivery-service editor offers
+// mode "API (ECPay)" for CVS kinds only while the ECPay connection is enabled and checked (§4.1 predicate).
 import {
   useCallback,
   useEffect,
@@ -9,6 +14,7 @@ import {
 } from "react";
 import type { Locale } from "@live-commerce/i18n";
 import { WorkspaceFrame } from "./WorkspaceFrame";
+import { LogisticsSettings } from "./LogisticsSettings";
 import { availabilityReason, settingsCopy } from "@/lib/settings-copy";
 import {
   csrfCookie,
@@ -32,6 +38,9 @@ import {
   type Service,
   type SettingsInitial,
 } from "@/lib/settings-model";
+import { readEcpay } from "@/lib/logistics-client";
+import { ecpayQualified } from "@/lib/logistics-model";
+import { logisticsCopy } from "@/lib/logistics-copy";
 import type { APIError, Page } from "@/lib/model";
 import "./settings.css";
 
@@ -62,7 +71,8 @@ type Draft = {
   min: string;
   max: string;
   serviceCode: string;
-  serviceKind: "home" | "cvs_711" | "cvs_familymart";
+  serviceKind: Service["delivery_kind"];
+  serviceMode: Service["mode"];
   shipping: string;
   taxMode: "none" | "inclusive" | "exclusive";
   taxBasis: "goods" | "goods_and_shipping";
@@ -98,6 +108,7 @@ const emptyDraft: Draft = {
   max: "1000000000000",
   serviceCode: "",
   serviceKind: "home",
+  serviceMode: "MANUAL",
   shipping: "0",
   taxMode: "none",
   taxBasis: "goods",
@@ -135,6 +146,7 @@ export function SettingsWizard({
   initial: SettingsInitial;
 }) {
   const c = settingsCopy[locale],
+    lc = logisticsCopy[locale],
     store = initial.store;
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [draft, setDraft] = useState<Draft>(emptyDraft);
@@ -172,6 +184,9 @@ export function SettingsWizard({
   const stepRef = useRef(step);
   stepRef.current = step;
   const [methodListTarget, setMethodListTarget] = useState("");
+  // Whether "API (ECPay)" may be chosen for a CVS service: the store's ECPay connection is enabled and checked.
+  // Read-only probe (GET logistics/ecpay, integration:read); a 403/404/failure simply leaves API mode unavailable.
+  const [ecpayReady, setEcpayReady] = useState(false);
   const hashKey = useRef<HTMLInputElement>(null),
     hashIV = useRef<HTMLInputElement>(null);
   const activeAccount =
@@ -191,6 +206,18 @@ export function SettingsWizard({
     validCode(draft.serviceCode)
       ? `${draft.marketID}:${draft.country}:${draft.serviceCode}`
       : "";
+
+  const probeEcpay = store?.id ?? "";
+  const probeStep = ready && draft.branch === "manual" && step === 3;
+  useEffect(() => {
+    if (!probeEcpay || !probeStep) return;
+    const active = new AbortController();
+    readEcpay(probeEcpay, active.signal).then(
+      (value) => setEcpayReady(ecpayQualified(value)),
+      () => !active.signal.aborted && setEcpayReady(false),
+    );
+    return () => active.abort();
+  }, [probeEcpay, probeStep]);
 
   function saveDraft(next: Draft, atStep = stepRef.current) {
     persistDraft(next, atStep);
@@ -293,6 +320,7 @@ export function SettingsWizard({
       nameHant: saved?.name_hant ?? "",
       nameEN: saved?.name_en ?? "",
       serviceKind: saved?.delivery_kind ?? current.serviceKind,
+      serviceMode: saved?.mode ?? "MANUAL",
       serviceEnabled: saved?.enabled ?? false,
       serviceVisible: saved?.visible ?? false,
       sort: String(saved?.sort_order ?? 10),
@@ -361,6 +389,8 @@ export function SettingsWizard({
   }
   function update<K extends keyof Draft>(field: K, value: Draft[K]) {
     const next = { ...draft, [field]: value };
+    // API (ECPay) is a CVS-only mode: choosing home delivery puts the service back to manual.
+    if (field === "serviceKind" && value === "home") next.serviceMode = "MANUAL";
     if (
       field === "serviceCode" ||
       field === "marketID" ||
@@ -397,6 +427,7 @@ export function SettingsWizard({
         "nameHant",
         "nameEN",
         "serviceKind",
+        "serviceMode",
         "serviceEnabled",
         "serviceVisible",
         "sort",
@@ -489,7 +520,8 @@ export function SettingsWizard({
             ![1, 2, 3, 4].includes(saved.step ?? 0)
           )
             throw new Error("storage");
-          setDraft(saved.draft);
+          // A draft saved before serviceMode existed reads as MANUAL.
+          setDraft({ ...emptyDraft, ...saved.draft });
           setStep(saved.step as 1 | 2 | 3 | 4);
         }
         if (rawPending) {
@@ -1508,6 +1540,8 @@ export function SettingsWizard({
       !validCode(draft.serviceCode) ||
       !validCountry(draft.country) ||
       (draft.serviceKind !== "home" && draft.country !== "TW") ||
+      // API (ECPay) exists only for a CVS kind while the ECPay connection is enabled and checked.
+      (draft.serviceMode === "API" && (draft.serviceKind === "home" || !ecpayReady)) ||
       sort === null ||
       !draft.nameHans.trim() ||
       !draft.nameHant.trim() ||
@@ -1540,7 +1574,7 @@ export function SettingsWizard({
         name_hant: draft.nameHant.trim(),
         name_en: draft.nameEN.trim(),
         delivery_kind: draft.serviceKind,
-        mode: "MANUAL",
+        mode: draft.serviceMode,
         enabled: draft.serviceEnabled,
         visible: draft.serviceVisible,
         sort_order: sort,
@@ -1773,6 +1807,7 @@ export function SettingsWizard({
                 <>
                   <h2 className="settings-section-title">{c.manual}</h2>
                   <p className="settings-note">{c.manualHint}</p>
+                  <LogisticsSettings store={store.id} locale={locale} />
                   <div className="settings-actions">
                     <button type="button" onClick={() => goStep(1)}>
                       {c.back}
@@ -2269,7 +2304,32 @@ export function SettingsWizard({
                               <option value="cvs_familymart">
                                 {c.cvsFamily}
                               </option>
+                              <option value="cvs_hilife">{lc.chains.cvs_hilife}</option>
+                              <option value="cvs_okmart">{lc.chains.cvs_okmart}</option>
                             </select>
+                          </label>
+                          <label>
+                            {lc.modeLabel}
+                            <select
+                              data-testid="settings-service-mode"
+                              value={draft.serviceMode}
+                              disabled={draft.serviceKind === "home"}
+                              onChange={(event) =>
+                                update(
+                                  "serviceMode",
+                                  event.target.value as Draft["serviceMode"],
+                                )
+                              }
+                            >
+                              <option value="MANUAL">{lc.modeManual}</option>
+                              {(ecpayReady || draft.serviceMode === "API") &&
+                                draft.serviceKind !== "home" && (
+                                  <option value="API" disabled={!ecpayReady}>
+                                    {lc.modeApi}
+                                  </option>
+                                )}
+                            </select>
+                            <small>{lc.modeApiHint}</small>
                           </label>
                         </div>
                         <form

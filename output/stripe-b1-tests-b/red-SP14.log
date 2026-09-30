@@ -1,0 +1,24 @@
+# RED proof SP14 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: reference view keeps cancel_requested on PAYUNi attempts (breaks ruling 4 / byte identity)
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP14BuyerHTTP$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_buyer_http_test.go:196: PAYUNi view-not-started changed on the wire (status 200):
+    stripe_buyer_http_test.go:203: BPH03/04 response included private or missing fields
+--- FAIL: TestStripeSP14BuyerHTTP (6.11s)
+    --- PASS: TestStripeSP14BuyerHTTP/payuni_bytes_identical_stripe_disabled (0.96s)
+    --- FAIL: TestStripeSP14BuyerHTTP/payuni_bytes_identical_stripe_enabled (0.49s)
+    --- FAIL: TestStripeSP14BuyerHTTP/stripe_view_prepare_handoff_enums_and_keys (0.59s)
+    --- PASS: TestStripeSP14BuyerHTTP/stripe_refresh_cancel_exact_keys_throttle_and_setonce (0.55s)
+    --- PASS: TestStripeSP14BuyerHTTP/stripe_handoff_unavailable_variants (2.61s)
+        --- PASS: TestStripeSP14BuyerHTTP/stripe_handoff_unavailable_variants/binding_disabled (0.62s)
+        --- PASS: TestStripeSP14BuyerHTTP/stripe_handoff_unavailable_variants/qualification_revoked (0.43s)
+        --- PASS: TestStripeSP14BuyerHTTP/stripe_handoff_unavailable_variants/after_cutoff (0.39s)
+        --- PASS: TestStripeSP14BuyerHTTP/stripe_handoff_unavailable_variants/config_digest_mismatch (0.59s)
+        --- PASS: TestStripeSP14BuyerHTTP/stripe_handoff_unavailable_variants/profile_mismatch (0.57s)
+    --- PASS: TestStripeSP14BuyerHTTP/refresh_cancel_config_mismatch_is_409_and_no_job (0.44s)
+    --- PASS: TestStripeSP14BuyerHTTP/scope_and_strictness (0.48s)
+FAIL
+FAIL	livecommerce/tests/foundation	6.623s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

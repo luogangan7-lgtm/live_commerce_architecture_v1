@@ -45,6 +45,18 @@ func identityFixture(t *testing.T) (*identity.Service, *identityProvider, *pgxpo
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The shared fixture outlives this test. Tests hand this login objects
+	// (TestIdentityPoolRejectsPrivilegeAndObjectOwnership creates identity.<role>()
+	// with default PUBLIC EXECUTE); leaving them makes every later strict pool
+	// gate (e.g. platform.OpenStripeIngressPool) correctly reject correct logins.
+	// Registered before pool.Close, so it runs after the pool is closed.
+	t.Cleanup(func() {
+		for _, q := range []string{`DROP OWNED BY `, `DROP ROLE `} {
+			if _, err := f.owner.Exec(context.Background(), q+pgx.Identifier{role}.Sanitize()); err != nil {
+				t.Errorf("identity fixture cleanup %s%s: %v", q, role, err)
+			}
+		}
+	})
 	u, err := url.Parse(f.databaseURL)
 	if err != nil {
 		t.Fatal(err)
@@ -217,8 +229,7 @@ func TestIdentityInitialStoreAtomicIdempotentAndScoped(t *testing.T) {
 	if err := f.owner.QueryRow(ctx, `SELECT ARRAY(SELECT permission FROM identity.store_grants WHERE tenant_id=$1::uuid ORDER BY permission),(SELECT count(*) FROM inventory.warehouses WHERE tenant_id=$1::uuid),(SELECT count(*) FROM ops.audit_events WHERE tenant_id=$1::uuid AND action='merchant.store_created')`, a.TenantID).Scan(&grants, &warehouses, &audits); err != nil {
 		t.Fatal(err)
 	}
-	wantGrants := "audit:read,audit:write,catalog:read,catalog:write,integration:manage,integration:read,inventory:read,inventory:reserve,inventory:write,orders:read,pricing:read,pricing:write,store:read"
-	if strings.Join(grants, ",") != wantGrants || warehouses != 1 || audits != 1 {
+	if strings.Join(grants, ",") != initialStoreGrants || warehouses != 1 || audits != 1 {
 		t.Fatalf("bootstrap grants=%v warehouses=%d audits=%d", grants, warehouses, audits)
 	}
 	if err := platform.WithScope(ctx, f.runtime, session.Token, a.StoreID, "catalog:write", func(tx pgx.Tx, scope platform.Scope) error {
@@ -394,3 +405,10 @@ func TestIdentityPoolRejectsPrivilegeAndObjectOwnership(t *testing.T) {
 		})
 	}
 }
+
+// initialStoreGrants is the exact, sorted permission set that
+// identity.create_initial_store (latest definition: migrations/0079_platform_billing.sql)
+// grants the creating principal. Every test asserting the initial owner's
+// grants compares against this one list so a migration that changes the set
+// fails loudly in one place instead of leaving stale per-test counts.
+const initialStoreGrants = "audit:read,audit:write,billing:manage,catalog:read,catalog:write,customers:privacy,customers:read,fulfillment:write,integration:execute,integration:manage,integration:read,inventory:read,inventory:reserve,inventory:write,live:manage,live:read,orders:export,orders:read,payments:refund,pricing:read,pricing:write,store:read"

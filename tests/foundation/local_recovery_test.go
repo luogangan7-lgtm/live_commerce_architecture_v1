@@ -130,7 +130,7 @@ func lrTarget(t *testing.T, kind, bootstrap string) lrCluster {
 		"docker", "run", "-d", "--pull=never", "--name", name, "--label", "livecommerce.fixture="+name,
 		"--memory=512m", "--cpus=1", "--pids-limit=128", "--tmpfs", "/var/lib/postgresql:rw,size=268435456",
 		"-e", "POSTGRES_USER", "-e", "POSTGRES_PASSWORD", "-e", "POSTGRES_DB", "-p", "127.0.0.1::5432",
-		lrImage, "-c", "shared_buffers=32MB", "-c", "max_connections=30")
+		lrImage, "-c", "shared_buffers=32MB", "-c", "max_connections=60")
 	c := lrCluster{id: strings.TrimSpace(string(id)), name: name, role: role, password: password}
 	// Cleanup only the recorded immutable ID after rechecking every ownership field.
 	t.Cleanup(func() {

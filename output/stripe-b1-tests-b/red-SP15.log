@@ -1,0 +1,15 @@
+# RED proof SP15 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: worker skips GET /v1/account verification before the first checkout call
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP15Process$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_process_test.go:97: timeout waiting for unavailable code: op state=UNKNOWN generation=36 last codes=[stripe_report_observed reconcile_claimed stripe_report_observed reconcile_claimed] fake requests=39
+--- FAIL: TestStripeSP15Process (144.22s)
+    --- PASS: TestStripeSP15Process/disabled_assembly_serves_payuni_and_retains_the_stripe_job (79.47s)
+    --- FAIL: TestStripeSP15Process/account_mismatch_fails_before_any_checkout_request (40.63s)
+    --- PASS: TestStripeSP15Process/exact_version_credentials_survive_rotation_and_never_substitute (9.86s)
+    --- PASS: TestStripeSP15Process/built_payment_worker_binary_sandbox_stripe_enabled_ready_and_sigterm (10.49s)
+FAIL
+FAIL	livecommerce/tests/foundation	144.736s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

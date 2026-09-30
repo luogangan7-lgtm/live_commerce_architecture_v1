@@ -335,7 +335,7 @@ func TestBuyerCheckoutAuthorityAndLegacyMerchantFence(t *testing.T) {
 	}
 	for name, pool := range map[string]*pgxpool.Pool{"buyer": b.a.runtime, "issuer": b.a.issuer, "merchant": b.f.runtime, "identity": b.a.identity, "worker": b.worker} {
 		t.Run(name, func(t *testing.T) {
-			for _, sql := range []string{`SELECT checkout.begin_hold(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`, `INSERT INTO checkout.command_results DEFAULT VALUES`, `UPDATE checkout.orders SET commercial_state='CANCELLED'`} {
+			for _, sql := range []string{`SELECT checkout.begin_hold(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`, `INSERT INTO checkout.command_results DEFAULT VALUES`, `UPDATE checkout.orders SET commercial_state='CANCELLED'`} {
 				_, e := pool.Exec(context.Background(), sql)
 				daSQLState(t, e, "42501")
 			}

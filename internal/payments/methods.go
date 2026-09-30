@@ -1,4 +1,5 @@
-// Package payments owns merchant payment-method configuration, not payment attempts.
+// methods.go owns merchant payment-method configuration, not payment attempts.
+
 package payments
 
 import (

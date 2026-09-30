@@ -1,0 +1,77 @@
+/* Styles for the legal pages and LegalFooter only. Uses the existing globals.css custom properties
+   (--ink, --muted, --line, --teal, --navy, --focus); defines no new colour tokens. */
+.page {
+  max-width: 70ch;
+  margin: 0 auto;
+  padding: 32px 16px 48px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+.page h1 {
+  margin: 0 0 8px;
+  font-size: 1.75rem;
+  line-height: 1.25;
+  color: var(--navy);
+}
+.page h2 {
+  margin: 32px 0 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: 1.15rem;
+  color: var(--navy);
+}
+.page p {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.page address {
+  font-style: normal;
+}
+.updated {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.updated p {
+  display: inline-block;
+  margin: 4px 0;
+}
+/* Owner-text markers: visible until the owner supplies or approves the text (P3). */
+.pending,
+.draft {
+  padding: 8px 12px;
+  border: 1px solid var(--muted);
+  font-size: 0.95rem;
+}
+.pending {
+  border-style: dashed;
+}
+.draft {
+  border-left: 4px solid var(--teal);
+}
+.footer {
+  max-width: 70ch;
+  margin: 0 auto;
+  padding: 16px 16px 32px;
+  border-top: 1px solid var(--line);
+}
+.footer ul {
+  font-size: 0.875rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.footer a {
+  color: var(--muted);
+}
+.footer a:hover,
+.footer a:focus-visible {
+  color: var(--ink);
+}
+.footer a:focus-visible,
+.page a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

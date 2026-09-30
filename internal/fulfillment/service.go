@@ -1,5 +1,16 @@
-// Package fulfillment owns merchant delivery-service configuration revisions.
-// It does not commit caller-owned transactions or call carrier providers.
+// Package fulfillment owns merchant delivery-service configuration revisions, per-market delivery
+// allocation (which warehouses serve a country), pickup attestation (buyer-scoped read and lock) and the
+// merchant side of Taiwan convenience-store shipping (taiwan-cvs-logistics-v1, cvs*.go): the ECPay logistics
+// connection, chain and pay-at-pickup settings, one label request per order, shipment read, print form,
+// abandon, collection record, pay-at-pickup cancel/restock and the two public provider hooks (map return,
+// status). Every CVS write is one SECURITY DEFINER function of migrations/0073.
+//
+// It never commits the transaction of a caller that passes one in (the CVS methods open their own through
+// platform.WithScope), never speaks the ECPay wire format (internal/integrations/shipping/ecpay does, with
+// TLS to logistics(-stage).ecpay.com.tw only), never runs the dispatcher route, never writes a stock or
+// ledger row itself (inventory.release_pay_at_pickup is the one audited writer, called through SQL), never
+// holds pay-at-pickup money, and never returns or logs a credential, recipient field or trade number. Manual
+// shipment recording lives in internal/merchantorders.
 package fulfillment
 
 import (
@@ -273,7 +284,7 @@ func validServiceInput(in ServiceInput) bool {
 		!printable(in.NameHant, 120) || !printable(in.NameEN, 120) || in.SortOrder < 0 || in.SortOrder > 1000 {
 		return false
 	}
-	if in.DeliveryKind != "home" && in.DeliveryKind != "cvs_711" && in.DeliveryKind != "cvs_familymart" {
+	if in.DeliveryKind != "home" && !isCVSKind(in.DeliveryKind) {
 		return false
 	}
 	if in.DeliveryKind != "home" && in.Country != "TW" {
@@ -287,7 +298,9 @@ func validServiceInput(in ServiceInput) bool {
 	if !bindingAbsent && !bindingPresent {
 		return false
 	}
-	return (in.Mode != "MANUAL" || bindingAbsent) && (in.Mode != "API" || !in.Enabled)
+	// R-2 (taiwan-cvs-logistics-v1 §4.1): an API service can be enabled only with a binding (and only for a CVS kind); the SQL trigger
+	// guard_api_service_binding then requires it to belong to the store's qualified, enabled ecpay_logistics profile.
+	return (in.Mode != "MANUAL" || bindingAbsent) && (in.Mode != "API" || !in.Enabled || (bindingPresent && isCVSKind(in.DeliveryKind)))
 }
 
 func printable(value string, max int) bool {

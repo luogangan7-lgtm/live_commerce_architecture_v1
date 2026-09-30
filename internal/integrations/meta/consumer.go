@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
+	"livecommerce/internal/claims/grammar"
 	"livecommerce/internal/command"
 	"livecommerce/internal/platform"
 )
@@ -26,8 +27,9 @@ var (
 // under a separately validated ordinary worker pool.
 type ConsumerWorker struct {
 	river.WorkerDefaults[inboxJobArgs]
-	pool *pgxpool.Pool
-	keys *PayloadKeyring
+	pool  *pgxpool.Pool
+	keys  *PayloadKeyring
+	actor ClaimsActorKey // zero = claim staging off (MC01-07 bytes)
 }
 
 var _ river.Worker[inboxJobArgs] = (*ConsumerWorker)(nil)
@@ -38,7 +40,15 @@ func (ConsumerWorker) MarshalJSON() ([]byte, error) {
 	return []byte(`"meta.ConsumerWorker{redacted}"`), nil
 }
 
+// NewConsumerWorker never stages claims: it equals NewConsumerWorkerWithClaims with the zero key.
 func NewConsumerWorker(ctx context.Context, pool *pgxpool.Pool, keys *PayloadKeyring) (*ConsumerWorker, error) {
+	return NewConsumerWorkerWithClaims(ctx, pool, keys, ClaimsActorKey{})
+}
+
+// NewConsumerWorkerWithClaims additionally stages one text-free claims.meta_intake row per
+// qualifying comment on a bound object, inside the consumer transaction, when actor holds a key
+// (meta-claims-intake-v1 §5.1). A zero actor never stages.
+func NewConsumerWorkerWithClaims(ctx context.Context, pool *pgxpool.Pool, keys *PayloadKeyring, actor ClaimsActorKey) (*ConsumerWorker, error) {
 	if ctx == nil || pool == nil || keys == nil || !validPayloadKeyID(keys.activeID) ||
 		len(keys.keys) < 1 || len(keys.keys) > 16 {
 		return nil, ErrConfig
@@ -49,7 +59,7 @@ func NewConsumerWorker(ctx context.Context, pool *pgxpool.Pool, keys *PayloadKey
 	if err := platform.ValidateMetaConsumerPool(ctx, pool); err != nil {
 		return nil, ErrConfig
 	}
-	return &ConsumerWorker{pool: pool, keys: keys}, nil
+	return &ConsumerWorker{pool: pool, keys: keys, actor: actor}, nil
 }
 
 func (*ConsumerWorker) Timeout(*river.Job[inboxJobArgs]) time.Duration { return consumerTimeout }
@@ -162,8 +172,49 @@ func (w *ConsumerWorker) Work(ctx context.Context, job *river.Job[inboxJobArgs])
 		job.Args.EventID, job.ID, job.Attempt, projection.family, projection.subjectKey); err != nil {
 		return consumerDatabaseError(err)
 	}
+	if w.actor.set && projection.family == "comment" {
+		if err = w.stageClaim(bounded, tx, job, loaded, plaintext); err != nil {
+			return err
+		}
+	}
 	if err = tx.Commit(bounded); err != nil {
 		return consumerDatabaseError(err)
+	}
+	return nil
+}
+
+// stageClaim is the one sanctioned Meta -> claims edge (§5.1): after the comment fact is
+// written and before COMMIT it hands meta_inbox.stage_claim_intake the qualification of the
+// already projected unit. An unqualified comment stages nothing (the social fact still commits).
+// Any staging error rolls back the whole transaction, so no fact commits without its intake
+// decision; the job is retried by River (never cancelled: cancelling would drop the social fact
+// for a transient or configuration fault). No network, no River, no claims table access.
+// meta_inbox.stage_claim_intake: owner commerce_meta_writer, EXECUTE commerce_meta_consumer only.
+func (w *ConsumerWorker) stageClaim(ctx context.Context, tx pgx.Tx, job *river.Job[inboxJobArgs], loaded socialLoaded, plaintext []byte) error {
+	candidate, ok := qualifyClaim(*loaded.object, *loaded.assetID, *loaded.kind, plaintext)
+	if !ok {
+		return nil
+	}
+	var keyword *string
+	var quantity *int32
+	var explicit *bool
+	if candidate.Parsed.Keyword != "" {
+		keyword = &candidate.Parsed.Keyword
+	}
+	if candidate.Parsed.Quantity > 0 {
+		q := int32(candidate.Parsed.Quantity)
+		quantity = &q
+	}
+	if candidate.Parsed.Kind == grammar.Match {
+		explicit = &candidate.Parsed.Explicit
+	}
+	actor := ClaimActorKey(w.actor, *loaded.object, *loaded.assetID, candidate.FromID)
+	var staged *string
+	if err := tx.QueryRow(ctx, `SELECT meta_inbox.stage_claim_intake($1::uuid,$2::bigint,$3::integer,$4::text,$5::text,$6::text,
+		NULL::timestamptz,$7::text,$8::text,$9::integer,$10::boolean)::text`,
+		job.Args.EventID, job.ID, job.Attempt, candidate.ObjectID, candidate.CommentRef, actor,
+		string(candidate.Parsed.Kind), keyword, quantity, explicit).Scan(&staged); err != nil {
+		return ErrConsumerStorage
 	}
 	return nil
 }

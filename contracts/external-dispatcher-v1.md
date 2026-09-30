@@ -134,3 +134,32 @@ is bounded/non-negative; registry and caller-owned pool are immutable/retained.
   query-only reconciliation, same immutable UUID/key, final local persisted fact.
 - Full real-PG/race/vet regression plus independent review; production adapters,
   exact-once remote effects, global quotas and full T06 not implied by these gates.
+
+## Amendment proposal (meta-claims-intake-v1 round 1, 2026-09-29; APPROVED by integrator 2026-09-29 for meta-claims-intake-v1)
+
+Proposed by the `meta-claims-intake-v1` contract author; approved by the integrator (IR-12
+there, 2026-09-29). Nothing above changes until the meta-claims-intake unit implements it. Full text: `meta-claims-intake-v1.md` §6.4.
+Summary: `DispatchRoute` gains an optional pair `LoadSecret(ctx, pgx.Tx, SecretClaim)
+(Secret, error)` + `DispatchWithSecret(ctx, DispatchRequest, Secret)`. In `dispatch` mode only,
+after the final gate, the dispatcher runs `LoadSecret` in one bounded transaction that ends
+before the call; `SecretClaim` (operation, generation, lease token) reaches only `LoadSecret`,
+whose sole body is a lease-fenced SQL loader. `Secret` is redacted in every formatter, zeroed
+after use, and never passed to Check or Reconcile. `ErrPolicyDenied` from `LoadSecret` →
+BLOCKED_POLICY `credential_unavailable`; any other error → UNKNOWN `secret_load_failed` with
+zero calls. Lease inequality becomes `CallTimeout + 3*DBTimeout + 1s < lease`. Existing routes
+are unaffected. Added gate: a secret is never observable by Check/Reconcile, and a loader
+failure makes zero provider calls.
+
+## Amendment note (meta-ads-v1 round 3, 2026-09-30; ruling X2 in `docs/delivery/units/r2-design-rulings.md`)
+
+Additive, lands with the meta-ads A-10 unit: `DispatchRequest` gains `Mode string` (`"dispatch"|"reconcile"`),
+set by the dispatcher from `claim.Mode` before `Check` (today `Check` runs for every claimed op, `dispatcher.go:226`,
+and a reconcile-mode denial is `completeAmbiguous('policy_check_failed')`, `:236–240`). Ads/CAPI `Check` returns nil in
+`reconcile` mode; existing routes ignore the field (no behaviour change). Full text: `meta-ads-v1.md` §3.1.
+
+- 2026-09-30 (meta-ads brief ruling B13): A10-D2 Check denials carry a stable code recorded on the op; A10-D3 job insert names the route's queue. Additive; existing routes unchanged.
+- Integrator rulings, merged 2026-09-30 (unit ads-a10, `1bf3535`; `internal/integrations/core`), additive, existing routes byte-identical:
+  - A10-D1 `DispatchRequest.Mode` is `json:"-"` (ephemeral per claim, never marshalled); set on the request given to `Check` and to every callback.
+  - A10-D2 `DenyPolicy(code)` returns `PolicyDenial{Code}` (`errors.Is(_, ErrPolicyDenied)`); in dispatch mode it records BLOCKED_POLICY with that code when it matches `codePattern`, else `policy_denied`. A bare `ErrPolicyDenied` keeps `policy_denied`. Reconcile-mode Check denials stay UNKNOWN `policy_check_failed` (unchanged).
+  - A10-D3 `InsertOperationJobOn(ctx, jobs, tx, operationID, queue, priority)`: same args/kind as `InsertOperationJob`, explicit queue `^[a-z][a-z0-9_]{0,39}$` and priority 1..4, else `command.ErrInvalid`. `InsertOperationJob` stays on queue `default`. The `river_job` guard must admit the queue (ads-core `post_river/0015`).
+  - A10-D4 reconcile with `ReconcileWithSecret`: loader `ErrPolicyDenied` → UNKNOWN `credential_unavailable`; other loader error/panic → UNKNOWN `secret_load_failed`; the secret is zeroed after the callback. Route validation: exactly one of `Reconcile`/`ReconcileWithSecret`, the latter only with the `LoadSecret`+`DispatchWithSecret` pair.

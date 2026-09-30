@@ -1,0 +1,286 @@
+=== RUN   TestInputHasOnlyFrozenFields
+--- PASS: TestInputHasOnlyFrozenFields (0.00s)
+=== RUN   TestSQLFailuresAreBounded
+--- PASS: TestSQLFailuresAreBounded (0.00s)
+=== RUN   TestExpiryJobContainsOnlyDurableIdentity
+--- PASS: TestExpiryJobContainsOnlyDurableIdentity (0.00s)
+=== RUN   TestExpiryWorkerRejectsInvalidInvocation
+--- PASS: TestExpiryWorkerRejectsInvalidInvocation (0.00s)
+=== RUN   TestHostedFormIsBoundedSingleValueJSON
+--- PASS: TestHostedFormIsBoundedSingleValueJSON (0.00s)
+=== RUN   TestHostedHandoffNeverReturnsFormAfterIssued
+--- PASS: TestHostedHandoffNeverReturnsFormAfterIssued (0.00s)
+=== RUN   TestOptionsCursorCanonicalAndScoped
+--- PASS: TestOptionsCursorCanonicalAndScoped (0.00s)
+=== RUN   TestOrdersCursorCanonicalAndOwnerBound
+--- PASS: TestOrdersCursorCanonicalAndOwnerBound (0.00s)
+=== RUN   TestOrdersInvalidServiceDoesNotPanic
+--- PASS: TestOrdersInvalidServiceDoesNotPanic (0.00s)
+=== RUN   TestPaymentInputAndProfileBoundary
+--- PASS: TestPaymentInputAndProfileBoundary (0.00s)
+=== RUN   TestPaymentResultAndJobBoundary
+--- PASS: TestPaymentResultAndJobBoundary (0.00s)
+=== RUN   TestPaymentViewBoundedShape
+=== RUN   TestPaymentViewBoundedShape/null-methods
+=== RUN   TestPaymentViewBoundedShape/second-method
+=== RUN   TestPaymentViewBoundedShape/unknown-state
+=== RUN   TestPaymentViewBoundedShape/unknown-handoff
+=== RUN   TestPaymentViewBoundedShape/missing-deadline
+=== RUN   TestPaymentViewBoundedShape/owner-order
+=== RUN   TestPaymentViewBoundedShape/pending-option
+=== RUN   TestPaymentViewBoundedShape/cancelled-option
+=== RUN   TestPaymentViewBoundedShape/currency
+=== RUN   TestPaymentViewBoundedShape/amount
+--- PASS: TestPaymentViewBoundedShape (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/null-methods (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/second-method (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/unknown-state (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/unknown-handoff (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/missing-deadline (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/owner-order (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/pending-option (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/cancelled-option (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/currency (0.00s)
+    --- PASS: TestPaymentViewBoundedShape/amount (0.00s)
+=== RUN   TestPaymentViewNotFoundMapping
+--- PASS: TestPaymentViewNotFoundMapping (0.00s)
+=== RUN   TestStripeHostedConfigDigestIsFrozenShape
+--- PASS: TestStripeHostedConfigDigestIsFrozenShape (0.00s)
+=== RUN   TestHostedProvidersConstructorBoundary
+--- PASS: TestHostedProvidersConstructorBoundary (0.00s)
+=== RUN   TestStripeHandoffValidatorAndRedirectShape
+--- PASS: TestStripeHandoffValidatorAndRedirectShape (0.00s)
+=== RUN   TestStripePaymentResultUsesClosedCurrencyTable
+--- PASS: TestStripePaymentResultUsesClosedCurrencyTable (0.00s)
+=== RUN   TestPaymentViewV2Validator
+--- PASS: TestPaymentViewV2Validator (0.00s)
+=== RUN   TestSignalRequestsFailClosedWithoutStripe
+--- PASS: TestSignalRequestsFailClosedWithoutStripe (0.00s)
+PASS
+ok  	livecommerce/internal/checkout	1.389s
+=== RUN   TestBuyerHTTPCatalogQueryAdmission
+--- PASS: TestBuyerHTTPCatalogQueryAdmission (0.00s)
+=== RUN   TestBuyerHTTPCatalogProjectionExactKeys
+--- PASS: TestBuyerHTTPCatalogProjectionExactKeys (0.00s)
+=== RUN   TestClaimRoutesAndMethods
+--- PASS: TestClaimRoutesAndMethods (0.00s)
+=== RUN   TestClaimTokenOnlyInItsHeaderOnItsRoutes
+--- PASS: TestClaimTokenOnlyInItsHeaderOnItsRoutes (0.00s)
+=== RUN   TestClaimTokenHeaderStrictness
+--- PASS: TestClaimTokenHeaderStrictness (0.00s)
+=== RUN   TestClaimEarlyTransportFailures
+=== RUN   TestClaimEarlyTransportFailures/direct_cart_write_with_derived_key
+=== RUN   TestClaimEarlyTransportFailures/preview_replay_key
+=== RUN   TestClaimEarlyTransportFailures/redeem_without_key
+=== RUN   TestClaimEarlyTransportFailures/preview_wrong_method
+--- PASS: TestClaimEarlyTransportFailures (0.00s)
+    --- PASS: TestClaimEarlyTransportFailures/direct_cart_write_with_derived_key (0.00s)
+    --- PASS: TestClaimEarlyTransportFailures/preview_replay_key (0.00s)
+    --- PASS: TestClaimEarlyTransportFailures/redeem_without_key (0.00s)
+    --- PASS: TestClaimEarlyTransportFailures/preview_wrong_method (0.00s)
+=== RUN   TestClaimProjectionsAreExact
+--- PASS: TestClaimProjectionsAreExact (0.00s)
+=== RUN   TestBodyTimeoutIsUnavailableNotMalformedInput
+--- PASS: TestBodyTimeoutIsUnavailableNotMalformedInput (0.00s)
+=== RUN   TestExactRoutesAndMethods
+--- PASS: TestExactRoutesAndMethods (0.00s)
+=== RUN   TestOrdersStrictQuery
+--- PASS: TestOrdersStrictQuery (0.00s)
+=== RUN   TestCanonicalHeadersAndForbiddenScope
+--- PASS: TestCanonicalHeadersAndForbiddenScope (0.00s)
+=== RUN   TestStrictJSONAndBody
+--- PASS: TestStrictJSONAndBody (0.00s)
+=== RUN   TestSessionEarlyErrorsNeverRetryable
+=== RUN   TestSessionEarlyErrorsNeverRetryable/missing_key
+=== RUN   TestSessionEarlyErrorsNeverRetryable/missing_origin
+=== RUN   TestSessionEarlyErrorsNeverRetryable/bad_key
+=== RUN   TestSessionEarlyErrorsNeverRetryable/duplicate_key
+=== RUN   TestSessionEarlyErrorsNeverRetryable/scope_cookie
+=== RUN   TestSessionEarlyErrorsNeverRetryable/authorization
+=== RUN   TestSessionEarlyErrorsNeverRetryable/replay_key
+--- PASS: TestSessionEarlyErrorsNeverRetryable (0.00s)
+    --- PASS: TestSessionEarlyErrorsNeverRetryable/missing_key (0.00s)
+    --- PASS: TestSessionEarlyErrorsNeverRetryable/missing_origin (0.00s)
+    --- PASS: TestSessionEarlyErrorsNeverRetryable/bad_key (0.00s)
+    --- PASS: TestSessionEarlyErrorsNeverRetryable/duplicate_key (0.00s)
+    --- PASS: TestSessionEarlyErrorsNeverRetryable/scope_cookie (0.00s)
+    --- PASS: TestSessionEarlyErrorsNeverRetryable/authorization (0.00s)
+    --- PASS: TestSessionEarlyErrorsNeverRetryable/replay_key (0.00s)
+=== RUN   TestTransportUnknownAndUnsupportedStayJSON
+--- PASS: TestTransportUnknownAndUnsupportedStayJSON (0.00s)
+=== RUN   TestErrorClassification
+--- PASS: TestErrorClassification (0.00s)
+=== RUN   TestBuyerHTTPOptionsQueryAdmission
+--- PASS: TestBuyerHTTPOptionsQueryAdmission (0.00s)
+=== RUN   TestBuyerHTTPOptionsProjectionExactKeys
+--- PASS: TestBuyerHTTPOptionsProjectionExactKeys (0.00s)
+=== RUN   TestBuyerPaymentRoutesAndOneShotInput
+--- PASS: TestBuyerPaymentRoutesAndOneShotInput (0.00s)
+=== RUN   TestBuyerPaymentPrepareStrictProjection
+--- PASS: TestBuyerPaymentPrepareStrictProjection (0.00s)
+=== RUN   TestBuyerPaymentSignalRoutesAreKeylessPostOnlyAndFailClosed
+--- PASS: TestBuyerPaymentSignalRoutesAreKeylessPostOnlyAndFailClosed (0.00s)
+=== RUN   TestBuyerPaymentKeylessPathsAreNonRetryableAndPrepareAdmitsStripe
+--- PASS: TestBuyerPaymentKeylessPathsAreNonRetryableAndPrepareAdmitsStripe (0.00s)
+=== RUN   TestProjectCartExactKeysAndNonNullItems
+--- PASS: TestProjectCartExactKeysAndNonNullItems (0.00s)
+=== RUN   TestProjectQuoteExactKeysSnapshotAndNonNullLines
+--- PASS: TestProjectQuoteExactKeysSnapshotAndNonNullLines (0.00s)
+=== RUN   TestProjectDestinationExactKeysAndPickupAllowlist
+--- PASS: TestProjectDestinationExactKeysAndPickupAllowlist (0.00s)
+=== RUN   TestProjectCheckoutReceiptOnly
+--- PASS: TestProjectCheckoutReceiptOnly (0.00s)
+=== RUN   TestProjectOrderSummaryExactKeys
+--- PASS: TestProjectOrderSummaryExactKeys (0.00s)
+=== RUN   TestProjectOrderExactDisplayAndDraftOnlyExpiry
+--- PASS: TestProjectOrderExactDisplayAndDraftOnlyExpiry (0.00s)
+=== RUN   TestBootstrapExactRouteAndNoReplayKey
+--- PASS: TestBootstrapExactRouteAndNoReplayKey (0.00s)
+=== RUN   TestBootstrapEarlyAdmissionAndBody
+=== RUN   TestBootstrapEarlyAdmissionAndBody/missing_bearer
+=== RUN   TestBootstrapEarlyAdmissionAndBody/duplicate_bearer
+=== RUN   TestBootstrapEarlyAdmissionAndBody/replay_key
+=== RUN   TestBootstrapEarlyAdmissionAndBody/query
+=== RUN   TestBootstrapEarlyAdmissionAndBody/bare_query
+=== RUN   TestBootstrapEarlyAdmissionAndBody/browser_origin
+=== RUN   TestBootstrapEarlyAdmissionAndBody/missing_BFF_key
+=== RUN   TestBootstrapEarlyAdmissionAndBody/missing_storefront_origin
+--- PASS: TestBootstrapEarlyAdmissionAndBody (0.00s)
+    --- PASS: TestBootstrapEarlyAdmissionAndBody/missing_bearer (0.00s)
+    --- PASS: TestBootstrapEarlyAdmissionAndBody/duplicate_bearer (0.00s)
+    --- PASS: TestBootstrapEarlyAdmissionAndBody/replay_key (0.00s)
+    --- PASS: TestBootstrapEarlyAdmissionAndBody/query (0.00s)
+    --- PASS: TestBootstrapEarlyAdmissionAndBody/bare_query (0.00s)
+    --- PASS: TestBootstrapEarlyAdmissionAndBody/browser_origin (0.00s)
+    --- PASS: TestBootstrapEarlyAdmissionAndBody/missing_BFF_key (0.00s)
+    --- PASS: TestBootstrapEarlyAdmissionAndBody/missing_storefront_origin (0.00s)
+PASS
+ok  	livecommerce/internal/buyerhttp	1.642s
+=== RUN   TestDisabledAccountsReadNoSecrets
+--- PASS: TestDisabledAccountsReadNoSecrets (0.00s)
+=== RUN   TestEnabledAccountsEnvironmentAssemblyStartsNoWorker
+--- PASS: TestEnabledAccountsEnvironmentAssemblyStartsNoWorker (0.00s)
+=== RUN   TestAccountConfigStrictBoundary
+=== RUN   TestAccountConfigStrictBoundary/bad_flag
+=== RUN   TestAccountConfigStrictBoundary/unknown_field
+=== RUN   TestAccountConfigStrictBoundary/trailing_value
+=== RUN   TestAccountConfigStrictBoundary/duplicate_IDs
+=== RUN   TestAccountConfigStrictBoundary/noncanonical_base64
+=== RUN   TestAccountConfigStrictBoundary/wrong_length
+=== RUN   TestAccountConfigStrictBoundary/replay_reused
+=== RUN   TestAccountConfigStrictBoundary/missing_active
+--- PASS: TestAccountConfigStrictBoundary (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/bad_flag (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/unknown_field (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/trailing_value (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/duplicate_IDs (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/noncanonical_base64 (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/wrong_length (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/replay_reused (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/missing_active (0.00s)
+=== RUN   TestAccountConfigRequiresIdentityAndLiteralLoopbackBeforeSecrets
+--- PASS: TestAccountConfigRequiresIdentityAndLiteralLoopbackBeforeSecrets (0.00s)
+=== RUN   TestBuyerPaymentNestedFlagsReadOnlyWhenEnabled
+--- PASS: TestBuyerPaymentNestedFlagsReadOnlyWhenEnabled (0.00s)
+=== RUN   TestBuyerPaymentConfigUsesHistoricalKeyParserWithoutMerchantHTTP
+--- PASS: TestBuyerPaymentConfigUsesHistoricalKeyParserWithoutMerchantHTTP (0.00s)
+=== RUN   TestBuyerPaymentStripeFlagIsNestedAndNeverReadsStripeSecrets
+--- PASS: TestBuyerPaymentStripeFlagIsNestedAndNeverReadsStripeSecrets (0.00s)
+=== RUN   TestBuyerDisabledDoesNotReadCredentials
+--- PASS: TestBuyerDisabledDoesNotReadCredentials (0.00s)
+=== RUN   TestBuyerConfigurationFailClosed
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_DATABASE_URLa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_DATABASE_URLb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ISSUER_DATABASE_URLa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ISSUER_DATABASE_URLb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_CHECKOUT_DATABASE_URLa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_CHECKOUT_DATABASE_URLb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BFF_KEYa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ENABLEDa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ENABLEDb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYc
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLc
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLd
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLe
+--- PASS: TestBuyerConfigurationFailClosed (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_DATABASE_URLa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_DATABASE_URLb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ISSUER_DATABASE_URLa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ISSUER_DATABASE_URLb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_CHECKOUT_DATABASE_URLa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_CHECKOUT_DATABASE_URLb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BFF_KEYa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ENABLEDa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ENABLEDb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYc (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLc (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLd (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLe (0.00s)
+=== RUN   TestBuyerMountedBeforePathCleaning
+--- PASS: TestBuyerMountedBeforePathCleaning (0.00s)
+=== RUN   TestClaimsConfigStartupAdmission
+--- PASS: TestClaimsConfigStartupAdmission (0.00s)
+=== RUN   TestIdentityDisabledDoesNotReadAuthorityConfiguration
+--- PASS: TestIdentityDisabledDoesNotReadAuthorityConfiguration (0.00s)
+=== RUN   TestIdentityEnabledConfigurationFailClosed
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_PUBLIC_ORIGIN
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_IDENTITY_DATABASE_URL
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_BFF_KEY
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_OIDC_ISSUER
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_OIDC_CLIENT_ID
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_IDENTITY_PROVIDER_KEY
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_SESSION_TTL
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_ONBOARDING_CURRENCIES
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_1m
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_25h
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_forever
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_BFF_KEY_short
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_BFF_KEY_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_FIXTURE_ENABLED_1
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_ENABLED_true
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_USD,
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_twd
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_TWD,_US1
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_IDENTITY_ENABLED_true
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_IDENTITY_ENABLED_2
+--- PASS: TestIdentityEnabledConfigurationFailClosed (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_PUBLIC_ORIGIN (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_IDENTITY_DATABASE_URL (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_BFF_KEY (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_OIDC_ISSUER (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_OIDC_CLIENT_ID (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_IDENTITY_PROVIDER_KEY (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_SESSION_TTL (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_ONBOARDING_CURRENCIES (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_1m (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_25h (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_forever (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_BFF_KEY_short (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_BFF_KEY_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_FIXTURE_ENABLED_1 (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_ENABLED_true (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_USD, (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_twd (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_TWD,_US1 (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_IDENTITY_ENABLED_true (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_IDENTITY_ENABLED_2 (0.00s)
+=== RUN   TestIdentityPublicOriginAndPrivateListener
+--- PASS: TestIdentityPublicOriginAndPrivateListener (0.00s)
+=== RUN   TestMetaAPIDisabledAndPrivateBeforeSecrets
+--- PASS: TestMetaAPIDisabledAndPrivateBeforeSecrets (0.00s)
+=== RUN   TestMetaAPIConfigAndRedaction
+--- PASS: TestMetaAPIConfigAndRedaction (0.00s)
+=== RUN   TestMetaMountedBeforeServeMuxCleaning
+--- PASS: TestMetaMountedBeforeServeMuxCleaning (0.00s)
+=== RUN   TestStudioBackendSTU05StartupAdmission
+--- PASS: TestStudioBackendSTU05StartupAdmission (0.00s)
+PASS
+ok  	livecommerce/cmd/api	1.672s

@@ -1,0 +1,3 @@
+ok  	livecommerce/internal/checkout	2.187s
+ok  	livecommerce/internal/buyerhttp	2.886s
+ok  	livecommerce/cmd/api	2.279s

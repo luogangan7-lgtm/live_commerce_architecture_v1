@@ -152,10 +152,12 @@ func TestProjectDestinationExactKeysAndPickupAllowlist(t *testing.T) {
 
 func TestProjectCheckoutReceiptOnly(t *testing.T) {
 	expires := time.Date(2026, 9, 1, 12, 15, 0, 0, time.UTC)
-	result := checkout.Result{OrderID: "order-1", ReservationID: "private-reservation", Generation: 8, ExpiresAt: expires, JobID: 42}
+	result := checkout.Result{OrderID: "order-1", ReservationID: "private-reservation", Generation: 8, ExpiresAt: expires, JobID: 42,
+		PaymentMode: "pay_at_pickup", CommercialState: "CONFIRMED"}
 	got := projectCheckout(result)
-	raw := assertExactKeys(t, got, map[string][]string{"$": {"order_id", "hold_expires_at"}})
-	if got.OrderID != result.OrderID || !got.HoldExpiresAt.Equal(expires) {
+	// taiwan-cvs-logistics-v1 §16.2: the receipt also names the payment mode and the state at placement; never ids or the job.
+	raw := assertExactKeys(t, got, map[string][]string{"$": {"order_id", "hold_expires_at", "payment_mode", "commercial_state"}})
+	if got.OrderID != result.OrderID || !got.HoldExpiresAt.Equal(expires) || got.PaymentMode != "pay_at_pickup" || got.CommercialState != "CONFIRMED" {
 		t.Fatalf("receipt lost values: %+v", got)
 	}
 	for _, forbidden := range []string{"private-reservation", "reservation_id", "generation", "job_id", "42"} {
@@ -197,7 +199,7 @@ func TestProjectOrderExactDisplayAndDraftOnlyExpiry(t *testing.T) {
 	}
 	got := projectOrder(order)
 	want := map[string][]string{
-		"$":                                   {"order_id", "cart_id", "cart_version", "commercial_state", "fulfillment_state", "hold_expires_at", "snapshot"},
+		"$":                                   {"order_id", "cart_id", "cart_version", "commercial_state", "fulfillment_state", "hold_expires_at", "snapshot", "shipment", "payment_mode", "collection_state", "cvs_shipment"},
 		"$.snapshot":                          {"quote", "destination", "service"},
 		"$.snapshot.quote":                    {"currency", "lines", "amount"},
 		"$.snapshot.quote.lines[0]":           {"sku_id", "code", "name", "description", "quantity", "unit_price_minor", "amount"},
@@ -226,7 +228,7 @@ func TestProjectOrderExactDisplayAndDraftOnlyExpiry(t *testing.T) {
 		t.Fatal("non-DRAFT order retained a hold expiry")
 	}
 	if raw := assertExactKeys(t, paid, map[string][]string{
-		"$":                                   {"order_id", "cart_id", "cart_version", "commercial_state", "fulfillment_state", "snapshot"},
+		"$":                                   {"order_id", "cart_id", "cart_version", "commercial_state", "fulfillment_state", "snapshot", "shipment", "payment_mode", "collection_state", "cvs_shipment"},
 		"$.snapshot":                          {"quote", "destination", "service"},
 		"$.snapshot.quote":                    {"currency", "lines", "amount"},
 		"$.snapshot.quote.lines[0]":           {"sku_id", "code", "name", "description", "quantity", "unit_price_minor", "amount"},
@@ -246,7 +248,7 @@ func TestProjectOrderExactDisplayAndDraftOnlyExpiry(t *testing.T) {
 		t.Fatal("empty order quote lines must be [] and absent pickup must remain omitted")
 	}
 	if raw := assertExactKeys(t, withoutOptionals, map[string][]string{
-		"$":                                   {"order_id", "cart_id", "cart_version", "commercial_state", "fulfillment_state", "snapshot"},
+		"$":                                   {"order_id", "cart_id", "cart_version", "commercial_state", "fulfillment_state", "snapshot", "shipment", "payment_mode", "collection_state", "cvs_shipment"},
 		"$.snapshot":                          {"quote", "destination", "service"},
 		"$.snapshot.quote":                    {"currency", "lines", "amount"},
 		"$.snapshot.quote.amount":             {"subtotal_minor", "discount_minor", "shipping_minor", "shipping_tax_minor", "tax_minor", "total_minor"},

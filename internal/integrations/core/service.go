@@ -1,5 +1,9 @@
-// Package core owns the provider-neutral external-operation ledger boundary.
-// It does not call providers or commit caller-owned transactions.
+// Package core owns the provider-neutral external-operation ledger boundary: the external_operation
+// records, their River dispatcher and the sealed-secret handle that provider routes receive.
+//
+// It never calls a provider itself (routes registered by metareply, payments and others do), never
+// commits caller-owned transactions, and never retries an UNKNOWN outcome with a new idempotency
+// key.
 package core
 
 import (
@@ -109,6 +113,9 @@ type Outcome struct {
 	State             string `json:"state"`
 	Code              string `json:"code"`
 	ProviderReference string `json:"provider_reference"`
+	// Detail is route-private data from the adapter to its own DispatchRoute.Finish (R-7a). Complete
+	// ignores it and it is never marshalled; it must hold a comparable value (tests compare Outcomes).
+	Detail any `json:"-"`
 }
 
 type externalOperationArgs struct {
@@ -397,7 +404,7 @@ func mapError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
-		case "40001", "23505":
+		case "40001", "23505", "PT409":
 			return command.ErrConflict
 		case "23503", "P0002":
 			return command.ErrNotFound

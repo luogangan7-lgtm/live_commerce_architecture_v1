@@ -1,0 +1,54 @@
+# File: .dockerignore
+# Purpose: build-context filter for every deploy image (context = repo root):
+#   deploy/docker/{go,admin,storefront}.Dockerfile. Keeps the context small and makes sure no
+#   VCS data, local env files, keys, evidence or dependency trees reach an image layer.
+# Runs as/in: read by `docker build` on the build host (deploy/scripts/build-images.sh).
+# Reads env / secrets: none. Secrets never live in the repo checkout (see deploy/README.md).
+# Used by: all image builds. Depends on: nothing.
+# Status: DESIGN; verified by smoke S06 (required patterns present) and S07 (builds).
+# Change rules: images only COPY go.mod/go.sum, cmd, internal, migrations, deploy/tools,
+#   package manifests, apps/*, packages/*, scripts/dev/package-admin.mjs. Do not exclude those.
+#   .git is excluded, so Go builds use -buildvcs=false and the revision goes into OCI labels.
+
+# VCS, agent and editor state
+.git
+.github
+.codex
+.claude
+.impeccable
+.worktrees
+.local
+**/.DS_Store
+
+# Dependency trees and build output (rebuilt inside the image from the lockfile)
+**/node_modules
+**/.next
+**/*.tsbuildinfo
+bin
+coverage.out
+
+# Test output, evidence and docs that images never need
+deploy/.evidence
+evidence
+experiments
+output
+test-results
+playwright-report
+tests
+docs
+contracts
+
+# Local configuration and anything that could hold a secret
+.env
+.env.*
+**/.env
+**/.env.*
+deploy/env/*.env
+**/*.local.*
+**/*.pem
+**/*.key
+**/*.crt
+**/*.p12
+**/*.pfx
+**/secrets
+**/*.dump

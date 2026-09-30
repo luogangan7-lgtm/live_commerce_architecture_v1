@@ -1,0 +1,78 @@
+=== RUN   TestStripeSP02Currency
+=== RUN   TestStripeSP02Currency/HKD_minimum
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/HKD_below
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/USD_minimum
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/USD_below
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/SGD_minimum
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/SGD_below
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/MYR_minimum
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/MYR_below
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/TWD_minimum
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/TWD_step
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/TWD_maximum
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/TWD_overflow
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/USD_maximum
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/USD_overflow
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/JPY_denied
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/ISK_denied
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/UGX_denied
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/HUF_denied
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/BHD_denied
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/lowercase_denied
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/zero_denied
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+=== RUN   TestStripeSP02Currency/negative_denied
+    stripe_schema_test.go:102: ERROR: function payments.stripe_amount_ok(unknown, unknown) does not exist (SQLSTATE 42883)
+--- FAIL: TestStripeSP02Currency (0.69s)
+    --- FAIL: TestStripeSP02Currency/HKD_minimum (0.00s)
+    --- FAIL: TestStripeSP02Currency/HKD_below (0.00s)
+    --- FAIL: TestStripeSP02Currency/USD_minimum (0.00s)
+    --- FAIL: TestStripeSP02Currency/USD_below (0.00s)
+    --- FAIL: TestStripeSP02Currency/SGD_minimum (0.00s)
+    --- FAIL: TestStripeSP02Currency/SGD_below (0.00s)
+    --- FAIL: TestStripeSP02Currency/MYR_minimum (0.00s)
+    --- FAIL: TestStripeSP02Currency/MYR_below (0.00s)
+    --- FAIL: TestStripeSP02Currency/TWD_minimum (0.00s)
+    --- FAIL: TestStripeSP02Currency/TWD_step (0.00s)
+    --- FAIL: TestStripeSP02Currency/TWD_maximum (0.00s)
+    --- FAIL: TestStripeSP02Currency/TWD_overflow (0.00s)
+    --- FAIL: TestStripeSP02Currency/USD_maximum (0.00s)
+    --- FAIL: TestStripeSP02Currency/USD_overflow (0.00s)
+    --- FAIL: TestStripeSP02Currency/JPY_denied (0.00s)
+    --- FAIL: TestStripeSP02Currency/ISK_denied (0.00s)
+    --- FAIL: TestStripeSP02Currency/UGX_denied (0.00s)
+    --- FAIL: TestStripeSP02Currency/HUF_denied (0.00s)
+    --- FAIL: TestStripeSP02Currency/BHD_denied (0.00s)
+    --- FAIL: TestStripeSP02Currency/lowercase_denied (0.00s)
+    --- FAIL: TestStripeSP02Currency/zero_denied (0.00s)
+    --- FAIL: TestStripeSP02Currency/negative_denied (0.00s)
+=== RUN   TestStripeSP06Schema
+    stripe_schema_test.go:124: SP06 missing schema requirement: migration 0061_stripe_psp.sql
+--- FAIL: TestStripeSP06Schema (0.00s)
+=== RUN   TestStripeSP19LiveRefusal
+    stripe_schema_test.go:193: ERROR: function "integration.register_stripe_platform_account(text,text,uuid,uuid,text,bytea)" does not exist (SQLSTATE 42883)
+--- FAIL: TestStripeSP19LiveRefusal (0.00s)
+FAIL
+FAIL	livecommerce/tests/foundation	1.218s
+FAIL
+test-focused: top-level PASS=0 FAIL=3 SKIP=0 exit=1

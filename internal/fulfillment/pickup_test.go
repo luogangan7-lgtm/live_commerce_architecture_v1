@@ -16,6 +16,14 @@ func TestValidPickupInput(t *testing.T) {
 	if !validPickupInput(base) {
 		t.Fatal("valid leading-zero source rejected")
 	}
+	// The manual attestation path serves all four chains (taiwan-cvs-logistics-v1 TD6); only 'home' is not a pickup kind.
+	for _, kind := range []string{"cvs_familymart", "cvs_hilife", "cvs_okmart"} {
+		in := base
+		in.Kind = kind
+		if !validPickupInput(in) {
+			t.Fatalf("manual pickup of kind %s rejected", kind)
+		}
+	}
 	cases := []struct {
 		name string
 		edit func(*PickupInput)

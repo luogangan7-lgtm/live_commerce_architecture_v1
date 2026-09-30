@@ -45,7 +45,7 @@ func TestBrowserMerchantBuyerRealChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	adminOrigin := "http://" + listener.Addr().String()
+	adminOrigin := browserFront(t, listener.Addr().String()) // https TLS front under LC_BROWSER_ENGINE=webkit, else http://addr
 	_, adminPort, _ := net.SplitHostPort(listener.Addr().String())
 	_ = listener.Close()
 	idp := newBrowserIDP(t, adminOrigin+"/api/auth/callback")

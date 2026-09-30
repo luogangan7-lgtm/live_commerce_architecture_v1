@@ -81,7 +81,7 @@ func pqSetupItemsOn(t *testing.T, base *testFixture, keys *accounts.Keyring, fre
 	q := pqFixture{psHarness: p, keys: keys, accountService: service, schema: schema}
 	q.rotate(t, 1, pqOldSecret)
 	// This disposable owner seeds MOCK qualification only; real issuers remain closed.
-	mustExec(t, p.f.owner, `UPDATE payments.account_qualifications SET credential_version=2 WHERE id=$1`, p.proof)
+	qualExec(t, p.f.owner, `UPDATE payments.account_qualifications SET credential_version=2 WHERE id=$1`, p.proof)
 	if freshSession {
 		q.cap.Token, q.cap.Scope.SessionID = randomToken(), randomUUID()
 		mustExec(t, p.f.owner, `INSERT INTO buyer.capability_sessions(tenant_id,store_id,owner_id,id,token_hash,expires_at) VALUES($1,$2,$3,$4,$5,clock_timestamp()+interval '1 hour')`, q.cap.Scope.TenantID, q.cap.Scope.StoreID, q.cap.Scope.OwnerID, q.cap.Scope.SessionID, tokenHash(q.cap.Token))
@@ -187,7 +187,7 @@ func TestBuyerPaymentQueryHistoricalCredentialAndACL(t *testing.T) {
 	q := pqSetup(t)
 	q.rotate(t, 2, accounts.Credentials{HashKey: strings.Repeat("N", 32), HashIV: strings.Repeat("I", 16)})
 	mustExec(t, q.f.owner, `UPDATE integration.bindings SET enabled=false,semantic_version=semantic_version+1 WHERE id=$1`, q.binding)
-	mustExec(t, q.f.owner, `UPDATE payments.account_qualifications SET revoked_at=clock_timestamp() WHERE id=$1`, q.proof)
+	qualExec(t, q.f.owner, `UPDATE payments.account_qualifications SET revoked_at=clock_timestamp() WHERE id=$1`, q.proof)
 	c := q.claim(t)
 	ctx := context.Background()
 	tx, e := q.worker.Begin(ctx)

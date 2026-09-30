@@ -1,0 +1,1 @@
+{"order_id":"00000000-0000-4000-8000-000000000000","currency":"TWD","total_minor":2500,"commercial_state":"DRAFT","test_mode":true,"payment_state":"NOT_STARTED","handoff_state":"NONE","handoff_expires_at":null,"methods":[{"code":"payuni_credit","version":1,"name_hans":"测试","name_hant":"測試","name_en":"Mock"}]}

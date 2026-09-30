@@ -1,0 +1,71 @@
+stripe-b1-tests-b evidence disclosures (docs/delivery/units/stripe-b1-tests-b.md)
+
+TIER: MOCK = real PG 18 (test-focused.sh container, or an isolated per-gate container for gates that
+need the payment-queue audit), real River clients in-process, the real assembly functions the binaries
+call, stripetest fake. No api.stripe.com request, no secret, no production DSN. The binaries refuse
+PROVIDER_MOCK; only SP15 runs a binary (cmd/payment-worker, SANDBOX profile, no Stripe network at start).
+
+WHAT THE LOGS IN THIS DIRECTORY ARE (and are not)
+- red-SPxx.log / green-*-ref.log: run against a SCRATCH REFERENCE IMPLEMENTATION that I wrote from the
+  FROZEN signatures in the two briefs (never from the other units' branches) and that was never committed.
+  They prove the tests can fail (one targeted mutation per gate) and can pass, and they found real test
+  bugs. They are NOT merge evidence. The integrator must re-run every gate on the merged candidate after
+  stripe-b1-pool-fix + start-http + ingress-assembly land and record the brief's red run there.
+- Scratch stand-ins used only in those runs: checkout Stripe path, stripeadmin, stripewebhook, buyerhttp
+  refresh/cancel routes, cmd seams, stripe.ProbeCheckout, ungated Stripe pool openers and one
+  GRANT UPDATE(kind) for the ingress role (the pool-fix P1-A/B stand-ins).
+- compile-frozen-stubs.log: go vet against stubs of exactly the frozen signatures (compile check only).
+- compile-worktree-before-merge.log: expected compile failure on the not-yet-merged symbols (not a red run).
+- pool baseline (throwaway probe on base): platform.OpenStripeIngressPool and OpenStripeRegistrarPool reject
+  correctly provisioned logins ("stripe ingress/registrar database unavailable"). Every PG gate here that
+  opens those pools is BLOCKED_ON_POOL_FIX until stripe-b1-pool-fix merges. Nothing was worked around
+  in the committed tests.
+
+OWNER-POOL (migration owner, superuser) FIXTURES, EVERY ONE
+- Aged columns (sstAge), payments.stripe_sessions only, under SET LOCAL session_replication_role=replica
+  (bypasses payments.guard_stripe_session, the set-once/frozen-column trigger, on purpose): attempt_created_at,
+  expires_at, send_deadline, handoff_cutoff, create_first_sent_at, create_last_sent_at, pinned_at,
+  first_handed_out_at, cancel_requested_at, last_refresh_at, last_expire_at, url_purged_at, and the frozen
+  create_params->>'expires_at' (the worker rejects a snapshot whose body disagrees with its deadlines).
+  Nothing in checkout.payment_attempts, integration.operations or inventory is aged.
+- payments.provider_observations.received_at aged 61 min (replica role) for the ASYNC_PENDING clock (SP12).
+- The fake session is aged in step (stripetest.AgeSession: created, expires_at).
+- Pins in the shared fixture DB (sstPin, no worker there): integration.operations.provider_reference and the
+  set-once payments.stripe_sessions pin columns, exactly what record_stripe_observation writes for via=create.
+- Drift fixtures: payments.account_qualifications.revoked_at / observed_at / expires_at; integration.bindings.
+  enabled=false; payments.method_versions.environment='LIVE' (replica role, bypassing method_account_target_fk);
+  inventory.reservations.expires_at/created_at (hold expiry while start waits); payments.stripe_sessions.
+  signal_count=64 and refresh_count=29 (monotone, CHECK-bounded); buyer.capability_sessions.revoked_at.
+- Owner-inserted BUYER_* signals with their River job (sflSignal) for NOOP_TERMINAL, STALE_DROPPED
+  (created_at 11 min old) and busy-lease cases; one manual integration.Service.Claim to hold a lease, then
+  operations.lease_until set in the past; a forged cross-tenant stripe_signals insert that must fail.
+- SP13 hooks, all removed by cleanup: FOR UPDATE on the endpoint row (blocks prepare; also proves the 2 s DB
+  budget and the 32-slot cap), a deferred constraint trigger on stripe_webhook_receipts (sleep 1.5 s /
+  RAISE at COMMIT), a BEFORE INSERT trigger on stripe_signals that swallows the row (missing linkage), an
+  owner-side payments.set_stripe_webhook_endpoint call holding the endpoint lock (stale key_version).
+- Every account, credential, qualification, method and webhook endpoint row is written through stripeadmin
+  (registrar login, fake transport), never a merchant runtime role.
+
+UNTESTABLE OR AMBIGUOUS CLAUSES
+1. contracts/stripe-psp-v1.md 9.2 redirect_url regexp ^https://checkout\.stripe\.com/[!-~]{1,4000}$ cannot
+   compile in Go (RE2 repeat limit 1000). Tests check the class/host by regexp and the 1..4000 bound by length.
+2. SP13 "account_unregistered" cannot occur over HTTP any more (account derives from the immutable endpoint row).
+3. Foreign buyer's handoff: contract says 404; the frozen provider probe returns NULL for a foreign order so
+   the PAYUNi path (409 conflict) answers. Test accepts 404 or 409 and only forbids a disclosed URL.
+4. Handoff after the cutoff is UNAVAILABLE in SQL (contract text lists "CLOSED/cutoff/UNAVAILABLE"); CLOSED needs
+   a CAPTURED/CLOSED_UNPAID fact. Tests assert exactly that.
+5. SQL hosted_payment_view_v2 emits cancel_requested=false for non-Stripe orders; ruling 4 (omit for PAYUNi) makes
+   the Go layer responsible. The PAYUNi goldens go red if it is not masked (red-SP14.log).
+6. SP09 400-after-uncertain-send is guarded twice (worker mark==SEND and record_stripe_observation
+   create_send_count<>1). The red proof needs both layers mutated; a single-layer mutation stays green.
+7. cmd/stripe-admin: exact flag names of `method` and whether CLI `qualify` accepts PROVIDER_MOCK are not frozen;
+   the env-read test asserts only subset-of-allowed and no leakage.
+8. operations.provider_reference is '' (not NULL) after start.
+9. SP11 is "over HTTP" in the brief; throttle/cap/set-once are asserted over HTTP in SP14 and once over HTTP with
+   real workers in SP11; other SP11 rows use the service methods the routes call.
+
+NOT_RUN / BLOCKED
+- SANDBOX probe against real Stripe (SP21 subtest, t.Skip NOT_RUN unless STRIPE_SANDBOX=1).
+- BFF Node validators (apps/storefront) until the buyer-payment-ui amendment.
+- Existing TestBuyerPayment* / TestBuyerHTTP* regression, TestStripeAuthority* (other unit): need the merge.
+- Every PG gate against the merged candidate: BLOCKED_ON_POOL_FIX and on merge of both units.

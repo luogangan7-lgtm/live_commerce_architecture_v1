@@ -1,0 +1,84 @@
+name: Deploy smoke
+
+# R1 ruling G3 (docs/delivery/units/r1-final-rulings.md): deploy/scripts/smoke.sh static (S01 shellcheck
+# is preinstalled on ubuntu-24.04) and smoke.sh full (the whole compose stack as root with Docker) run on
+# a Linux runner instead of a developer machine. Same triggers as foundation.yml; workflow_dispatch lets
+# the integrator get a receipt for a branch before its PR run.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-smoke-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    # Cold image builds (lc-go, admin, storefront, caddy) dominate; the cases themselves take ~5 min.
+    timeout-minutes: 50
+    env:
+      GOTOOLCHAIN: go1.27.1
+      GOFLAGS: -mod=readonly
+      PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Free runner disk for the image builds
+        # preflight P13 (deploy/scripts/preflight.sh) requires >= 20 % free on the docker root and the backup
+        # dir; the stock runner image ships ~30 GB of SDKs this job never uses. Removing them is runner prep,
+        # the P13 threshold is unchanged.
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af >/dev/null
+          df -h / /tmp
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24" # package.json engines: >=24 <25
+      - name: Repo Playwright + Chromium for S34
+        # S34 drives Chromium through the edge; without the repo's @playwright/test it is NOT_RUN.
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH" && sudo chown "$(id -u)" "$PLAYWRIGHT_BROWSERS_PATH"
+          pnpm exec playwright install --with-deps chromium
+      - name: smoke.sh static (S01-S06)
+        run: |
+          rc=0
+          python3 .github/scripts/smoke-verdict.py --selftest
+          bash deploy/scripts/smoke.sh static || rc=$?
+          ev=$(ls -td deploy/.evidence/*/ | head -n1)
+          python3 .github/scripts/smoke-verdict.py "$ev/result.json" "$rc" static
+      - name: smoke.sh full (S07-S45, as root)
+        # Exit contract of smoke.sh: 0 PASS, 1 FAIL, 3 BLOCKED. BLOCKED is accepted only for S29m (ruling
+        # F11: logical-restore media gate, LiveKit media is not in R1); smoke-verdict.py fails the job on
+        # any FAIL, any other BLOCKED, a case that never ran, or a NOT_RUN. Logs contain only CASE lines;
+        # the temp secrets are generated per run, secret-scanned and deleted by smoke.sh itself.
+        run: |
+          rc=0
+          sudo --preserve-env=GOTOOLCHAIN,GOFLAGS,PLAYWRIGHT_BROWSERS_PATH env "PATH=$PATH" "HOME=$HOME" \
+            bash deploy/scripts/smoke.sh full || rc=$?
+          ev=$(ls -td deploy/.evidence/*/ | head -n1)
+          # preflight prints rule ids and names only, never values: show why a preflight-gated case failed.
+          sudo grep -hE '^P[0-9]+[a-z]? (FAIL|WARN) ' "$ev"/logs/S10.log "$ev"/logs/S37.log 2>/dev/null | sort -u || true
+          python3 .github/scripts/smoke-verdict.py "$ev/result.json" "$rc" full
+      - name: Upload smoke evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: deploy-smoke-evidence
+          path: |
+            deploy/.evidence/*/result.json
+            deploy/.evidence/*/cases.tsv
+            deploy/.evidence/*/commands.tsv
+          retention-days: 14

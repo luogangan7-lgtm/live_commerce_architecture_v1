@@ -51,7 +51,7 @@ func pwIsolatedFixture(t *testing.T) *testFixture {
 		"--tmpfs", "/var/lib/postgresql:rw,size=268435456", "-e", "POSTGRES_PASSWORD="+password,
 		"-e", "POSTGRES_DB=lc_foundation_test", "-p", "127.0.0.1::5432",
 		"postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280",
-		"-c", "shared_buffers=32MB", "-c", "max_connections=30").CombinedOutput()
+		"-c", "shared_buffers=32MB", "-c", "max_connections=60").CombinedOutput()
 	if err != nil {
 		t.Fatalf("start labelled local PG container: %v", err)
 	}
@@ -150,7 +150,7 @@ func pwOldQuerySetupOn(t *testing.T, f *testFixture, keys *accounts.Keyring, his
 	}
 	q := pqFixture{psHarness: p, keys: keys, accountService: service, schema: schema}
 	q.rotate(t, 1, pqOldSecret)
-	mustExec(t, p.f.owner, `UPDATE payments.account_qualifications SET credential_version=2 WHERE id=$1`, p.proof)
+	qualExec(t, p.f.owner, `UPDATE payments.account_qualifications SET credential_version=2 WHERE id=$1`, p.proof)
 	middleware := river.JobInsertMiddlewareFunc(func(ctx context.Context, params []*rivertype.JobInsertParams, next func(context.Context) ([]*rivertype.JobInsertResult, error)) ([]*rivertype.JobInsertResult, error) {
 		for _, row := range params {
 			if row.Kind == "payment_query_v1" {
@@ -575,10 +575,7 @@ func TestBuyerPaymentWorkerProcessSignalAndPoolCleanup(t *testing.T) {
 	case <-time.After(8 * time.Second):
 		t.Fatal("payment-worker did not stop after SIGTERM with no due jobs")
 	}
-	var remaining int
-	if err := f.owner.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity WHERE datname='lc_foundation_test' AND application_name=$1`, app).Scan(&remaining); err != nil || remaining != 0 {
-		t.Fatalf("worker pool leaked connections: %d %v", remaining, err)
-	}
+	waitPoolsGone(t, f, "worker pool leaked connections", app)
 }
 
 func TestBuyerPaymentWorkerCrashChild(t *testing.T) {

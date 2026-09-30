@@ -1,0 +1,67 @@
+# File: deploy/compose.two-host-db.yml
+# Purpose: override for the 2-host variant (deploy-design §8.4): PostgreSQL on its own host,
+#   reached by the app host over TLS on a private interface. Use with LC_TWO_HOST=1 so
+#   deploy/scripts/lib.sh lc_compose adds `-f compose.two-host-db.yml`.
+#   DB host:  COMPOSE_PROFILES=db[,ops]; migrate/provision-logins/pg-ops run HERE (socket).
+#   App host: COMPOSE_PROFILES=app[,payments-*][,meta]; LC_PG_HOST=<db private ip>,
+#             LC_PG_SSLMODE=verify-full; run `secrets-init.sh --rederive` so every DSN gets
+#             sslrootcert=/run/secrets/pg_ca_crt.
+# Runs as/in: docker compose on both hosts (same repo checkout, different compose.env).
+# Reads env: LC_PG_BIND_ADDR (DB host private IP to publish 5432 on), LC_SECRETS_DIR.
+# Reads secrets: pg_server_crt, pg_server_key (DB host; server TLS), pg_ca_crt (app host; CA
+#   that signed the server cert, used by verify-full). Owner-supplied, not in the manifest
+#   generator set: place them in LC_SECRETS_DIR with 0440 root:${LC_SECRETS_GID}.
+# Used by: deploy/scripts/lib.sh (LC_TWO_HOST=1), smoke S03 (config only).
+# Depends on: deploy/compose.yml; pg_hba.conf hostssl line enabled by the operator.
+# Status: NOT_RUN (config validated by smoke S03 only; TLS path untested, risk R6).
+# Change rules: trade-off stated in docs/runbooks/deploy.md §迁移: backend.internal=false weakens
+#   isolation on both hosts — restrict egress with the host firewall.
+
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - hba_file=/etc/postgresql/pg_hba.conf
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/secrets/pg_server_crt
+      - -c
+      - ssl_key_file=/run/secrets/pg_server_key    # 0440 root:GID is accepted (root-owned, <= 0640)
+    networks: [backend, dbnet]
+    ports:
+      - "${LC_PG_BIND_ADDR:?set LC_PG_BIND_ADDR to the DB host private IP}:5432:5432"
+    secrets: [pg_superuser_password, pg_server_crt, pg_server_key]
+
+  # App-host DB clients verify the server certificate (sslmode=verify-full in the DSN files).
+  api:
+    secrets: [pg_ca_crt]
+  expiry-worker:
+    secrets: [pg_ca_crt]
+  payment-worker-sandbox:
+    secrets: [pg_ca_crt]
+  payment-worker-live:
+    secrets: [pg_ca_crt]
+  meta-worker:
+    secrets: [pg_ca_crt]
+  claims-worker:
+    secrets: [pg_ca_crt]
+  ads-worker:
+    secrets: [pg_ca_crt]
+  stripe-admin:
+    secrets: [pg_ca_crt]
+  meta-admin:
+    secrets: [pg_ca_crt]
+
+networks:
+  backend:
+    internal: false               # must route to the other host; firewall restricts egress
+  dbnet: {}                       # non-internal network carrying the published 5432
+
+secrets:
+  pg_server_crt: { file: "${LC_SECRETS_DIR:?set LC_SECRETS_DIR}/pg_server_crt" }
+  pg_server_key: { file: "${LC_SECRETS_DIR:?set LC_SECRETS_DIR}/pg_server_key" }
+  pg_ca_crt: { file: "${LC_SECRETS_DIR:?set LC_SECRETS_DIR}/pg_ca_crt" }

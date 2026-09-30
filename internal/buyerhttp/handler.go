@@ -1,5 +1,8 @@
-// Package buyerhttp is the private, BFF-only buyer transport. It borrows its
-// database pools; publication and buyer authority are resolved per request.
+// Package buyerhttp owns the private, BFF-only buyer transport (catalog, cart, quote, checkout,
+// payment and claim routes). It borrows its database pools; publication and buyer authority are
+// resolved per request. It never serves the public internet directly, never trusts Host or a tenant
+// id from the client, and holds no pricing or stock rule: it maps HTTP onto the storefront, checkout
+// and claims packages.
 package buyerhttp
 
 import (
@@ -90,6 +93,14 @@ const (
 	paymentRoute
 	paymentPrepareRoute
 	paymentHandoffRoute
+	paymentRefreshRoute
+	paymentCancelRoute
+	claimLinkRoute
+	claimRedeemRoute
+	privacyRoute
+	consentsRoute
+	privacyExportRoute
+	privacyErasureRoute
 )
 
 type route struct {
@@ -119,12 +130,28 @@ func matchRoute(path string) route {
 		return route{kind: checkoutRoute}
 	case "/v1/buyer/orders":
 		return route{kind: ordersRoute}
+	case claimLinkPath:
+		return route{kind: claimLinkRoute}
+	case claimRedeemPath:
+		return route{kind: claimRedeemRoute}
+	case privacyPath:
+		return route{kind: privacyRoute}
+	case consentsPath:
+		return route{kind: consentsRoute}
+	case privacyExportPath:
+		return route{kind: privacyExportRoute}
+	case privacyErasurePath:
+		return route{kind: privacyErasureRoute}
+	}
+	if cvs := matchCVSRoute(path); cvs.kind != unknownRoute {
+		return cvs
 	}
 	if rest, ok := strings.CutPrefix(path, "/v1/buyer/orders/"); ok {
 		for _, entry := range []struct {
 			suffix string
 			kind   routeKind
-		}{{"/payment/prepare", paymentPrepareRoute}, {"/payment/handoff", paymentHandoffRoute}, {"/payment", paymentRoute}} {
+		}{{"/payment/prepare", paymentPrepareRoute}, {"/payment/handoff", paymentHandoffRoute},
+			{"/payment/refresh", paymentRefreshRoute}, {"/payment/cancel", paymentCancelRoute}, {"/payment", paymentRoute}} {
 			if id, matched := strings.CutSuffix(rest, entry.suffix); matched && id != "" && !strings.Contains(id, "/") {
 				return route{kind: entry.kind, id: id}
 			}
@@ -142,6 +169,9 @@ func matchRoute(path string) route {
 }
 
 func allowed(kind routeKind, method string) bool {
+	if isCVSRoute(kind) {
+		return allowedCVS(kind, method)
+	}
 	switch kind {
 	case sessionRoute:
 		return method == http.MethodGet || method == http.MethodPost || method == http.MethodDelete
@@ -153,12 +183,22 @@ func allowed(kind routeKind, method string) bool {
 		return method == http.MethodGet || method == http.MethodPut
 	case quotesRoute, checkoutRoute:
 		return method == http.MethodPost
-	case paymentPrepareRoute, paymentHandoffRoute:
+	case paymentPrepareRoute, paymentHandoffRoute, paymentRefreshRoute, paymentCancelRoute:
 		return method == http.MethodPost
 	case destinationRoute:
 		return method == http.MethodGet || method == http.MethodPut
 	case quoteRoute, destinationItemRoute, orderRoute:
 		return method == http.MethodGet
+	case claimLinkRoute:
+		return method == http.MethodGet
+	case claimRedeemRoute:
+		return method == http.MethodPost
+	case privacyRoute:
+		return method == http.MethodGet
+	case consentsRoute:
+		return method == http.MethodPut
+	case privacyExportRoute, privacyErasureRoute:
+		return method == http.MethodPost
 	}
 	return false
 }
@@ -191,7 +231,10 @@ func forbiddenInput(r *http.Request) bool {
 			return true
 		}
 	}
-	return false
+	// The claim-link bearer is accepted only on B1/B2 (claims.go); anywhere else it is a
+	// forbidden input, even when empty, so it can never ride along to another route.
+	claimRoute := r.URL.EscapedPath() == r.URL.Path && (r.URL.Path == claimLinkPath || r.URL.Path == claimRedeemPath)
+	return !claimRoute && len(r.Header.Values(claimTokenHeader)) != 0
 }
 
 func catalogRequest(raw string) (storefront.CatalogRequest, error) {
@@ -308,16 +351,33 @@ func keyFor(r *http.Request, noReplayKey bool, write bool) (string, bool) {
 	return returnValue, one && idempotencyKey.MatchString(returnValue)
 }
 
+// keylessPaymentPath is true for handoff/refresh/cancel, whose failures must never be auto-retried.
+func keylessPaymentPath(path string) bool {
+	if !strings.HasPrefix(path, "/v1/buyer/orders/") {
+		return false
+	}
+	for _, suffix := range []string{"/payment/handoff", "/payment/refresh", "/payment/cancel"} {
+		if strings.HasSuffix(path, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	issue := r.Method == http.MethodPost && r.URL != nil && r.URL.Path == "/v1/buyer/session"
-	handoff := r.URL != nil && strings.HasPrefix(r.URL.Path, "/v1/buyer/orders/") &&
-		strings.HasSuffix(r.URL.Path, "/payment/handoff")
+	// Handoff, refresh and cancel are keyless buyer clicks whose errors are never auto-retried.
+	handoff := r.URL != nil && keylessPaymentPath(r.URL.Path)
 	fail := func(status int, code string) {
 		if issue || handoff {
 			httperror.WriteNonRetryable(w, status, code)
 		} else {
 			httperror.Write(w, status, code)
 		}
+	}
+	if r.URL != nil && (r.URL.Path == claimLinkPath || r.URL.Path == claimRedeemPath) {
+		// Claim responses describe one bearer link; keep them out of every shared cache (§7).
+		w.Header().Set("Cache-Control", "private, no-store")
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -356,10 +416,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(http.StatusUnprocessableEntity, "invalid_request")
 		return
 	}
-	noReplayKey := issue || selected.kind == bootstrapRoute || selected.kind == retireRoute || selected.kind == paymentHandoffRoute
+	noReplayKey := issue || selected.kind == bootstrapRoute || selected.kind == retireRoute || isKeylessPaymentRoute(selected.kind) ||
+		selected.kind == routeCVSSelectionVerify
 	write := r.Method == http.MethodPut || (r.Method == http.MethodPost && !noReplayKey)
 	key, valid := keyFor(r, noReplayKey, write)
-	if !valid {
+	// "clm:" cart.set keys are derived by claims.RedeemLink under the opposite lock order
+	// (contract live-keyword-claims-v1 §5.6); a direct cart write may never use one.
+	if !valid || (selected.kind == cartRoute && strings.HasPrefix(key, claimDerivedKeyPrefix)) {
 		fail(http.StatusUnprocessableEntity, "invalid_request")
 		return
 	}
@@ -383,8 +446,14 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fail(status, code)
 		return
 	}
-	if err = h.dispatch(ctx, w, r, selected, routeInfo.StoreID, token, key); err != nil {
+	// cvsHTTPError here, once for every route: a coded CVS refusal from any service (checkout Begin's pay-at-pickup PT422/PT429
+	// included) is answered with its code, never the generic retryable 503 (TCV15).
+	if err = cvsHTTPError(h.dispatch(ctx, w, r, selected, routeInfo.StoreID, token, key)); err != nil {
 		status, code := classify(err)
+		var coded codedResponse
+		if errors.As(err, &coded) && coded.RetryAfterSeconds > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(coded.RetryAfterSeconds)) // 429 pay_at_pickup_limit / rate_limited
+		}
 		fail(status, code)
 	}
 }
@@ -447,7 +516,7 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 		w.WriteHeader(http.StatusNoContent)
 		return nil
 	}
-	if r.Method == http.MethodGet || r.Method == http.MethodDelete || selected.kind == paymentHandoffRoute {
+	if r.Method == http.MethodGet || r.Method == http.MethodDelete || isKeylessPaymentRoute(selected.kind) {
 		if err := noBody(r); err != nil {
 			return err
 		}
@@ -475,11 +544,26 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 		}{true})
 		return nil
 	}
+	// customers-core: the privacy handlers write their own response (attachment or JSON) and return only an error.
+	switch selected.kind {
+	case privacyRoute:
+		return h.privacyGet(ctx, w, r, storeID, token, key)
+	case consentsRoute:
+		return h.consentPut(ctx, w, r, storeID, token, key)
+	case privacyExportRoute:
+		return h.privacyExport(ctx, w, r, storeID, token, key)
+	case privacyErasureRoute:
+		return h.privacyErase(ctx, w, r, storeID, token, key)
+	}
 	var out any
 	var err error
 	switch selected.kind {
-	case paymentRoute, paymentPrepareRoute, paymentHandoffRoute:
+	case paymentRoute, paymentPrepareRoute, paymentHandoffRoute, paymentRefreshRoute, paymentCancelRoute:
 		out, err = h.paymentRequest(ctx, r, selected, storeID, token, key)
+	case claimLinkRoute, claimRedeemRoute:
+		out, err = h.claimRequest(ctx, r, selected.kind, storeID, token, key)
+	case routeCVSSelectionOpen, routeCVSSelectionGet, routeCVSSelectionVerify, routeCVSStoreEnter:
+		out, err = h.cvsRequest(ctx, r, selected, storeID, token, key)
 	case ordersRoute:
 		var request pagination.Request
 		request, err = ordersRequest(r.URL.RawQuery)
@@ -596,6 +680,12 @@ func (h *handler) dispatch(ctx context.Context, w http.ResponseWriter, r *http.R
 	}
 	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	if created, ok := out.(createdResponse); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(created.Body)
+		return nil
 	}
 	writeOK(w, out)
 	return nil

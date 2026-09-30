@@ -55,9 +55,13 @@ test("legacy Studio detail reuses the prepared parser but still binds draft vers
   const row = {
     draft: { session_id: id, program_id: id, title: "Fixture", scheduled_at: null,
       aspect_ratio: "16:9", state: "DRAFT", version: 1, created_at: date, updated_at: date },
-    prepared, attempt: null, can_manage: true,
+    prepared, attempt: null, can_manage: true, media_enabled: true,
   };
   assert.deepEqual(parseStudioDetail(row, id), row);
+  // R1 ruling G2: media_enabled is a required boolean capability (planning-only Studio sends false).
+  assert.deepEqual(parseStudioDetail({ ...row, prepared: null, media_enabled: false }, id), { ...row, prepared: null, media_enabled: false });
+  assert.throws(() => { const { media_enabled: _, ...legacy } = row; parseStudioDetail(legacy, id); });
+  assert.throws(() => parseStudioDetail({ ...row, media_enabled: "false" }, id));
   assert.throws(() => parseStudioDetail({ ...row, prepared: { ...prepared, session_version: 2 } }, id));
   assert.throws(() => parseStudioDetail({ ...row, prepared: { ...prepared, credential_version: 1 } }, id));
 });

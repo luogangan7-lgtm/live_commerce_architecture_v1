@@ -287,12 +287,12 @@
           }
         ],
         "responses": {
-          "202": {
-            "description": "受理或返回当前事实；202不表示远端已成功。",
+          "201": {
+            "description": "stripe-refund-v1 §7.1: returned after COMMIT; the Stripe refund itself is asynchronous.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Operation"
+                  "$ref": "#/components/schemas/RefundResult"
                 }
               }
             }
@@ -376,13 +376,12 @@
                 "type": "object",
                 "additionalProperties": false,
                 "required": [
-                  "order_version",
+                  "amount_minor",
                   "reason",
-                  "approval_id",
-                  "lines"
+                  "expected_refundable_minor"
                 ],
                 "properties": {
-                  "order_version": {
+                  "amount_minor": {
                     "type": "integer",
                     "minimum": 1
                   },
@@ -391,42 +390,16 @@
                     "minLength": 1,
                     "maxLength": 256
                   },
-                  "approval_id": {
-                    "type": "string",
-                    "format": "uuid"
-                  },
-                  "lines": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": 100,
-                    "items": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": [
-                        "order_line_id",
-                        "quantity",
-                        "amount"
-                      ],
-                      "properties": {
-                        "order_line_id": {
-                          "type": "string",
-                          "format": "uuid"
-                        },
-                        "quantity": {
-                          "type": "integer",
-                          "minimum": 1
-                        },
-                        "amount": {
-                          "$ref": "#/components/schemas/Money"
-                        }
-                      }
-                    }
+                  "expected_refundable_minor": {
+                    "type": "integer",
+                    "minimum": 0
                   }
                 }
               }
             }
           }
-        }
+        },
+        "x-contract": "contracts/stripe-refund-v1.md §7.1 (FROZEN); error codes refundable_changed(409), exceeds_refundable, amount_step, not_refundable, refund_blocked_review, refund_limit (422)"
       }
     },
     "/v1/admin/stores/{store_id}/live-sessions/{session_id}/start": {
@@ -1304,6 +1277,331 @@
             }
           }
         }
+      },
+      "MerchantOrderSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "order_id",
+          "created_at",
+          "updated_at",
+          "currency",
+          "total_minor",
+          "commercial_state",
+          "fulfillment_state",
+          "payment_state",
+          "test_mode",
+          "work_state",
+          "refunded_minor",
+          "refund_pending_minor"
+        ],
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "total_minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "commercial_state": {
+            "type": "string"
+          },
+          "fulfillment_state": {
+            "type": "string",
+            "description": "manual-fulfilment-v1 adds MERCHANT_SHIPPED"
+          },
+          "payment_state": {
+            "type": "string",
+            "description": "stripe-refund-v1 §7.1 adds PARTIALLY_REFUNDED, REFUNDED"
+          },
+          "test_mode": {
+            "type": "boolean"
+          },
+          "work_state": {
+            "type": "string"
+          },
+          "refunded_minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "refund_pending_minor": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "description": "identity.read_merchant_orders list row (0063): merchant-orders-v1 keys + stripe-refund-v1 §7.1 refunded_minor, refund_pending_minor."
+      },
+      "Shipment": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "status",
+          "carrier_code",
+          "carrier_name",
+          "tracking_number",
+          "tracking_url",
+          "recorded_at"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "enum": [
+              "SHIPPED",
+              "VOIDED"
+            ]
+          },
+          "carrier_code": {
+            "type": "string"
+          },
+          "carrier_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracking_number": {
+            "type": "string"
+          },
+          "tracking_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recorded_at": {
+            "type": "string"
+          }
+        },
+        "description": "manual-fulfilment-v1 §5 current shipment head (merchant detail `shipment`, buyer order `shipment`)."
+      },
+      "MerchantOrderDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "order_id",
+          "created_at",
+          "updated_at",
+          "currency",
+          "total_minor",
+          "commercial_state",
+          "fulfillment_state",
+          "payment_state",
+          "test_mode",
+          "work_state",
+          "refunded_minor",
+          "refund_pending_minor",
+          "country",
+          "service_code",
+          "items",
+          "totals",
+          "destination",
+          "shipment"
+        ],
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "total_minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "commercial_state": {
+            "type": "string"
+          },
+          "fulfillment_state": {
+            "type": "string",
+            "description": "manual-fulfilment-v1 adds MERCHANT_SHIPPED"
+          },
+          "payment_state": {
+            "type": "string",
+            "description": "stripe-refund-v1 §7.1 adds PARTIALLY_REFUNDED, REFUNDED"
+          },
+          "test_mode": {
+            "type": "boolean"
+          },
+          "work_state": {
+            "type": "string"
+          },
+          "refunded_minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "refund_pending_minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "country": {
+            "type": "string"
+          },
+          "service_code": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "totals": {
+            "type": "object"
+          },
+          "destination": {
+            "type": "object"
+          },
+          "shipment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Shipment"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "description": "Merchant order detail (0063): 15 merchant-orders-v1 keys + refunded_minor, refund_pending_minor, shipment (null until recorded)."
+      },
+      "RefundResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "refund_id",
+          "state",
+          "amount_minor",
+          "currency",
+          "refundable_minor"
+        ],
+        "properties": {
+          "refund_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "currency": {
+            "type": "string"
+          },
+          "refundable_minor": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "description": "stripe-refund-v1 §7.1 POST .../refunds 201 body."
+      },
+      "RefundItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "refund_id",
+          "amount_minor",
+          "reason",
+          "state",
+          "requested_at",
+          "updated_at",
+          "stripe_refund_id"
+        ],
+        "properties": {
+          "refund_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amount_minor": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "requested_at": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "failure_reason": {
+            "type": "string"
+          },
+          "stripe_refund_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "description": "stripe-refund-v1 §7.1 refund list item; stripe_refund_id merchant-only, null until pinned (R-9)."
+      },
+      "RefundList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "captured_minor",
+          "refunded_minor",
+          "pending_minor",
+          "refundable_minor",
+          "currency",
+          "items"
+        ],
+        "properties": {
+          "captured_minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "refunded_minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending_minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "refundable_minor": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "currency": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "$ref": "#/components/schemas/RefundItem"
+            }
+          }
+        },
+        "description": "stripe-refund-v1 §7.1 GET .../refunds body."
       }
     }
   },

@@ -1,0 +1,199 @@
+# File: deploy/caddy/Caddyfile
+# Purpose: edge routing + automatic TLS for the four public host names (deploy-design §12).
+# Runs as/in: service "caddy" (lc-caddy image, UID 10001) inside the shared edge netns, so every
+#   upstream below is plain HTTP on 127.0.0.1 (api :8080, admin :3100, storefront :3200).
+# Reads env: LC_ADMIN_HOST, LC_STORE_HOST, LC_API_HOST, LC_HOOKS_HOST (compose.env, wired by
+#   deploy/compose.yml) — the ONLY names Caddy serves (the storefront derives its origin from
+#   Host, so unknown Hosts must never be proxied); ACME_EMAIL (ACME account contact) and
+#   optional LC_ACME_CA (unset = Let's Encrypt production; staging URL for rehearsals) from
+#   env/caddy.env. `*.localhost` names automatically use Caddy's internal CA (smoke only).
+# Reads secrets: none. Certificates/ACME keys persist in the caddy-data volume (/data).
+# Used by: deploy/compose.yml caddy; deploy/scripts/smoke.sh S05, S17-S24 (S19: meta + stripe routes); deploy.sh post checks;
+#   docs/runbooks/deploy.md §证书与域名, incident.md §caddy.
+# Depends on: api/admin/storefront listening on the shared loopback; lc-caddy image.
+# Status: DESIGN; verified by smoke S05 (validate/fmt) and S17-S24 (runtime).
+# Change rules: the API host is default-deny — open more paths only with a published public
+#   API contract + security review. No `trusted_proxies`: Caddy is the edge, client
+#   X-Forwarded-* are replaced (AGENTS.md: never trust forwarded Host). A CDN/WAF in front (O9)
+#   requires trusted_proxies + DNS-01 and a new review. Reload without restart (one line):
+#   docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile --address unix//run/caddy/admin.sock
+{
+	# Admin API on a unix socket in a tmpfs: unreachable from the shared loopback (api/admin/storefront).
+	admin unix//run/caddy/admin.sock
+	email {$ACME_EMAIL}
+	acme_ca {$LC_ACME_CA:https://acme-v02.api.letsencrypt.org/directory}
+	# The read-only, non-root container cannot (and must not) edit a trust store.
+	skip_install_trust
+	servers {
+		timeouts {
+			read_header 10s
+			idle 2m
+		}
+	}
+	log {
+		output stdout
+		format json
+	}
+}
+
+(edge) {
+	encode zstd gzip
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	# Access log: JSON to stdout -> json-file driver (kept ~100 MB per container, bundled by
+	# collect-diagnostics.sh). Caddy redacts Cookie/Set-Cookie/Authorization by default, but it logs
+	# the full request URI including the query string, so credential-bearing query parameters are
+	# rewritten to REDACTED before the line is written (review P1; AGENTS.md: no secrets in logs):
+	#   hub.verify_token, hub_verify_token  Meta webhook verification (Meta sends both spellings,
+	#                     observed 2026-09-30) (production value from the owner secret
+	#                     commerce_meta_apps_json; read from the query by
+	#                     internal/integrations/meta/handler.go challenge()).
+	#   code, state       OIDC authorization response on admin /api/auth/callback
+	#                     (apps/admin/app/api/auth/callback/route.ts); `state` also appears in the
+	#                     Location of /api/auth/login's redirect to the IdP.
+	#                     Also the Meta ads connect return on admin /api/ads/meta/callback
+	#                     (meta-ads-v1 §2 step 2, apps/admin/app/api/ads/meta/callback/route.ts).
+	#   token, access_token, id_token  defensive: bearer-style parameters must never be logged.
+	# The same rules apply to the Referer request header and the Location response header, which
+	# can carry those URLs as well. Other parameters stay visible (e.g. hub.challenge) for triage.
+	# Verified by smoke S40 (canary values through the hooks and admin hosts; none may reach any
+	# container log). Add a parameter here whenever a route starts taking a secret in its query.
+	# Contains client IPs: retention is owner decision O8.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri query {
+					replace hub.verify_token REDACTED
+					replace hub_verify_token REDACTED
+					replace code REDACTED
+					replace state REDACTED
+					replace token REDACTED
+					replace access_token REDACTED
+					replace id_token REDACTED
+					replace password REDACTED
+					replace new_password REDACTED
+					replace email REDACTED
+				}
+				request>headers>Referer query {
+					replace hub.verify_token REDACTED
+					replace hub_verify_token REDACTED
+					replace code REDACTED
+					replace state REDACTED
+					replace token REDACTED
+					replace access_token REDACTED
+					replace id_token REDACTED
+					replace password REDACTED
+					replace new_password REDACTED
+					replace email REDACTED
+				}
+				resp_headers>Location query {
+					replace hub.verify_token REDACTED
+					replace hub_verify_token REDACTED
+					replace code REDACTED
+					replace state REDACTED
+					replace token REDACTED
+					replace access_token REDACTED
+					replace id_token REDACTED
+					replace password REDACTED
+					replace new_password REDACTED
+					replace email REDACTED
+				}
+			}
+		}
+	}
+	# Upstream down (deploy.sh maintenance window, crash) -> explicit maintenance 503.
+	handle_errors 502 503 504 {
+		header Retry-After "60"
+		header Content-Type "text/plain; charset=utf-8"
+		respond "Service temporarily unavailable. 服务维护中，请稍后再试。" 503
+	}
+}
+
+# Merchant back office (Next standalone, lc-admin).
+{$LC_ADMIN_HOST} {
+	import edge
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy 127.0.0.1:3100
+}
+
+# Buyer storefront (next start, lc-storefront). Host passes through unchanged (origin derivation).
+{$LC_STORE_HOST} {
+	import edge
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy 127.0.0.1:3200
+}
+
+# Default-deny: the Go API is a private BFF backend (loopback listener; BFF keys).
+# Open more paths only with a published public-API contract.
+{$LC_API_HOST} {
+	import edge
+	handle /healthz {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		respond 404
+	}
+}
+
+# Inbound webhooks only. BFF credentials are stripped so a webhook caller can never present them.
+{$LC_HOOKS_HOST} {
+	import edge
+	# 2 MB > the API's own 1 MiB Meta limit, so the app returns its own 413 code.
+	request_body {
+		max_size 2MB
+	}
+	request_header -Authorization
+	request_header -X-Commerce-BFF-Key
+	request_header -X-Commerce-Buyer-BFF-Key
+	handle /v1/meta/webhooks/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	# Stripe webhook endpoint: POST /v1/stripe/webhook/{endpoint_id} (stripe-psp-v1 §0.2, §12). The
+	# signature is over the RAW body, so nothing here rewrites it (no encode/rewrite on this path is
+	# applied to the request; the 2 MB cap above is only a ceiling, the app enforces its own limit).
+	# The endpoint id in the URL is the operator-registered one (stripe-admin webhook), not a secret.
+	handle /v1/stripe/webhook/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	# Platform-fee billing webhook: POST /v1/platform/stripe/webhook (customers-billing-v1 §5, billing-core
+	# B9). Same raw-body rule as the PSP webhook above: nothing rewrites the signed bytes; the app caps the
+	# body at 64 KiB. Exact path only (cmd/api mountPlatformBilling).
+	handle /v1/platform/stripe/webhook {
+		reverse_proxy 127.0.0.1:8080
+	}
+	# Taiwan CVS (taiwan-cvs-logistics-v1 §12): ECPay's store-map return (a buyer's browser POST) and its logistics status
+	# notification. Only these two routes reach Go here; any other /v1/cvs/* path on this host, or on LC_API_HOST, falls to 404.
+	# The map return carries no MAC (the app checks the selection nonce); the status body is MAC-verified in Go over the RAW body.
+	handle /v1/cvs/ecpay/map-return/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /v1/cvs/ecpay/status/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	# Reserved PAYUNi NotifyURL. No receiver exists yet (contracts/buyer-payment-http-v1.md:18); B4.
+	handle /payuni/notify {
+		respond 404
+	}
+	handle {
+		respond 404
+	}
+}
+
+# Container-local health endpoint for the image HEALTHCHECK; bound to loopback only.
+http://127.0.0.1:2080 {
+	bind 127.0.0.1
+	handle /healthz {
+		respond "ok" 200
+	}
+	handle {
+		respond 404
+	}
+}

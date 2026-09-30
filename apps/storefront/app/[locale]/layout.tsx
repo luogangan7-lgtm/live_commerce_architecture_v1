@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { isLocale } from "@live-commerce/i18n";
+import type { Locale } from "@live-commerce/i18n";
+import LegalFooter from "../../components/LegalFooter";
 import "../globals.css";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +39,7 @@ export default async function Layout({
           dangerouslySetInnerHTML={{ __html: direction }}
         />
         {children}
+        <LegalFooter locale={locale as Locale} />
       </body>
     </html>
   );

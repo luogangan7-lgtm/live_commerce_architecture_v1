@@ -1,4 +1,10 @@
-// Package buyer implements the internal anonymous buyer capability boundary.
+// Package buyer owns the anonymous buyer capability boundary: issuing short-lived opaque capability
+// tokens on the issuer pool and scoping every buyer transaction to one (tenant, store, owner,
+// session) with a replay-safe command record.
+//
+// It never identifies a person, holds merchant authority or PII, or trusts a tenant or store id from
+// a request; merchant scope is internal/platform. Only Service.New touches the issuer pool, so an
+// issuer pool cannot reach buyer callbacks.
 package buyer
 
 import (

@@ -26,7 +26,21 @@ const config: NextConfig = {
           {
             key: "Content-Security-Policy",
             value:
-              "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self' https://sandbox-api.payuni.com.tw/api/upp https://api.payuni.com.tw/api/upp",
+              "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self' https://sandbox-api.payuni.com.tw/api/upp https://api.payuni.com.tw/api/upp https://logistics-stage.ecpay.com.tw/Express/map https://logistics.ecpay.com.tw/Express/map",
+          },
+        ],
+      },
+      {
+        // The claim page holds a bearer link token in memory (live-keyword-claims-v1
+        // §11.1): no Referer at all, and no scripts or connections beyond this origin.
+        // Listed last so it overrides the shopping Referrer-Policy for this path only.
+        source: "/:locale(zh-CN|zh-TW|en)/claim",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          {
+            key: "Content-Security-Policy",
+            value:
+              "frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'none'; connect-src 'self'",
           },
         ],
       },

@@ -12,8 +12,10 @@ listener validation → existing 10-second startup context → runtime pool
 `live.NewMediaPlanner` → `httpapi.Options.Live`.
 
 `COMMERCE_STUDIO_ENABLED` is absent/empty/0 by default; only 1 enables it. Enabled
-configuration requires identity to be enabled. A nil planner registers no Studio
-routes. The API never starts River, loads media secrets or receives a media-worker,
+configuration requires identity to be enabled. Since R1 ruling G2 it mounts the planning
+routes only (`httpapi.Options.Studio`); the media planner above is built only with
+`COMMERCE_STUDIO_MEDIA_ENABLED=1` (requires Studio), and a nil planner leaves the rehearsal
+and input routes unmounted (404). See the G2 amendment in `contracts/studio-v1.md`. The API never starts River, loads media secrets or receives a media-worker,
 executor or registrar pool. The separate media process retains execution ownership.
 Do not enable this on customer systems as part of local verification.
 

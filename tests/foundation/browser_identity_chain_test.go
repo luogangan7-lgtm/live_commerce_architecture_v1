@@ -15,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -299,11 +300,46 @@ func browserLog(t *testing.T, path string) *os.File {
 }
 
 // Do not give Node the database owner DSN or ambient commerce credentials.
+// browserFront returns the public origin of an admin Next server that listens on the plain-HTTP loopback address `upstream`.
+// Chromium (the default engine) accepts the admin's Secure `__Host-` cookies over http://127.0.0.1, so the origin stays http://<upstream>.
+// WebKit does not: Safari enforces the `__Host-` prefix rule (https origin required) even on loopback, so under LC_BROWSER_ENGINE=webkit
+// the admin would never hold its login/session/CSRF cookies. That is a harness limit, not a product defect (production is https behind the
+// edge, which is what this front imitates): the admin is then reached through a TLS listener (httptest self-signed certificate; the
+// specs run with ignoreHTTPSErrors) whose HTTP reverse proxy adds X-Forwarded-Proto: https, keeps Host, and forwards the inbound
+// X-Forwarded-For untouched (the password BFF tests assert client-IP handling). Used by the password-auth, CVS and merchant-buyer gates.
+func browserFront(t *testing.T, upstream string) string {
+	t.Helper()
+	if os.Getenv("LC_BROWSER_ENGINE") != "webkit" {
+		return "http://" + upstream
+	}
+	target, err := url.Parse("http://" + upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := httptest.NewUnstartedServer(&httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(target)
+		r.Out.Host = r.In.Host
+		if v, ok := r.In.Header["X-Forwarded-For"]; ok {
+			r.Out.Header["X-Forwarded-For"] = v
+		}
+		r.Out.Header.Set("X-Forwarded-Proto", "https")
+	}})
+	front.StartTLS()
+	t.Cleanup(front.Close)
+	return front.URL
+}
+
 func browserEnvironment(values map[string]string) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
 		_, replaced := values[name]
+		// LC_BROWSER_ENGINE (chromium|webkit) is the one LC_* variable the Node/Playwright drivers must see: tests/storefront/browser-engine.mjs
+		// and playwright.config.ts read it. It carries no secret and cannot widen any fixture's authority.
+		if name == "LC_BROWSER_ENGINE" && !replaced {
+			env = append(env, entry)
+			continue
+		}
 		if replaced || strings.HasPrefix(name, "COMMERCE_") || strings.HasPrefix(name, "LC_") || name == "DATABASE_URL" || name == "POSTGRES_PASSWORD" {
 			continue
 		}

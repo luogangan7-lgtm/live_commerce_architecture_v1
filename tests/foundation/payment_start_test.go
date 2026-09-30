@@ -326,7 +326,7 @@ func TestBuyerPaymentAdmissionDenials(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := psSetup(t)
 			if tc.sql != "" {
-				mustExec(t, p.f.owner, tc.sql, p.f.tenantA)
+				qualExec(t, p.f.owner, tc.sql, p.f.tenantA) // some rows rewind the qualification (revoke-only trigger, 0077)
 			}
 			switch tc.name {
 			case "rotated_credential":
@@ -427,7 +427,7 @@ func TestBuyerPaymentFinalWaitGate(t *testing.T) {
 				mustExec(t, p.f.owner, `SELECT pg_sleep(GREATEST(0,extract(epoch FROM $1::timestamptz-clock_timestamp()))+0.02)`, expiry)
 				want = buyer.ErrUnauthorized
 			case "qualification":
-				mustExec(t, p.f.owner, `UPDATE payments.account_qualifications SET observed_at=clock_timestamp()-interval '2 hours',expires_at=clock_timestamp()-interval '1 hour' WHERE id=$1`, p.proof)
+				qualExec(t, p.f.owner, `UPDATE payments.account_qualifications SET observed_at=clock_timestamp()-interval '2 hours',expires_at=clock_timestamp()-interval '1 hour' WHERE id=$1`, p.proof)
 			case "market":
 				mustExec(t, p.f.owner, `UPDATE pricing.markets SET active=false WHERE id=$1`, p.market.ID)
 			}
@@ -544,7 +544,7 @@ func TestBuyerPaymentQualificationExpiresDuringFinalWrite(t *testing.T) {
 		t.Fatal(e)
 	}
 	var expiry time.Time
-	if e = p.f.owner.QueryRow(context.Background(), `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '600 milliseconds' WHERE id=$1 RETURNING expires_at`, p.proof).Scan(&expiry); e != nil {
+	if e = qualUpdateScan(context.Background(), p.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '600 milliseconds' WHERE id=$1 RETURNING expires_at`, []any{p.proof}, &expiry); e != nil {
 		t.Fatal(e)
 	}
 	done := make(chan error, 1)

@@ -252,7 +252,9 @@ func TestBrowserMerchantOrdersUIRealChain(t *testing.T) {
 	if err = q.f.owner.QueryRow(ctx, `SELECT md5(o::text) FROM checkout.orders o WHERE id=$1`, q.hold.OrderID).Scan(&originalHash); err != nil {
 		t.Fatal(err)
 	}
-	evidence := filepath.Join("/Volumes/data/output/merchant-orders-c-browser-20260927", time.Now().UTC().Format("20060102T150405.000000000"))
+	// Evidence stays under the gitignored repo output/playwright like the other
+	// browser chains; a workstation-only absolute path fails on Linux/CI hosts.
+	evidence := filepath.Join(root, "output/playwright/merchant-orders-c-browser", time.Now().UTC().Format("20060102T150405.000000000"))
 	if err = os.MkdirAll(evidence, 0700); err != nil {
 		t.Fatal(err)
 	}

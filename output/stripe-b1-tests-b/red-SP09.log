@@ -1,0 +1,19 @@
+# RED proof SP09 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: worker AND the SQL send-count fence both treat a 400 after an uncertain send as a first-send rejection (the two independent layers each block this alone: worker mark==SEND, record_stripe_observation create_send_count<>1)
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP09CreateUnknown$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_flow_test.go:688: a 400 after an uncertain send closed the attempt
+--- FAIL: TestStripeSP09CreateUnknown (33.37s)
+    --- PASS: TestStripeSP09CreateUnknown/drop_after_execute_replays_same_key_and_pins_same_session (0.65s)
+    --- PASS: TestStripeSP09CreateUnknown/cached_500_wait_then_list_match_pins (2.96s)
+    --- PASS: TestStripeSP09CreateUnknown/cached_500_without_session_closes_only_after_expires_plus_15m (6.38s)
+    --- PASS: TestStripeSP09CreateUnknown/first_send_400_closes_immediately (0.64s)
+    --- FAIL: TestStripeSP09CreateUnknown/400_after_uncertain_send_does_not_close_until_list (9.01s)
+    --- PASS: TestStripeSP09CreateUnknown/conflict_and_rate_limit_back_off_then_succeed (7.31s)
+    --- PASS: TestStripeSP09CreateUnknown/idempotency_error_alarms_without_closure (1.89s)
+    --- PASS: TestStripeSP09CreateUnknown/at_most_one_create_key_per_attempt_across_the_gate (0.00s)
+FAIL
+FAIL	livecommerce/tests/foundation	34.146s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

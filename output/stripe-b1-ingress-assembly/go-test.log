@@ -1,0 +1,15 @@
+cmd: GOTOOLCHAIN=go1.27.1 go test -race -count=1 ./internal/payments/... ./internal/integrations/psp/stripe/... ./cmd/... base=ba08af8
+ok  	livecommerce/internal/payments	1.412s
+ok  	livecommerce/internal/payments/stripeadmin	1.652s
+ok  	livecommerce/internal/payments/stripewebhook	2.032s
+ok  	livecommerce/internal/integrations/psp/stripe	2.085s
+ok  	livecommerce/internal/integrations/psp/stripe/stripetest	1.634s
+ok  	livecommerce/cmd/admin-fixture	2.302s
+ok  	livecommerce/cmd/api	1.737s
+ok  	livecommerce/cmd/expiry-worker	1.775s
+ok  	livecommerce/cmd/media-worker	1.712s
+ok  	livecommerce/cmd/meta-worker	1.742s
+ok  	livecommerce/cmd/migrate	1.402s
+ok  	livecommerce/cmd/payment-worker	1.346s
+ok  	livecommerce/cmd/stripe-admin	1.325s
+exit=0

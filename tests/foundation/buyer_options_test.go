@@ -66,8 +66,28 @@ func boptRead(t *testing.T, h bhHarness, query string) boptPage {
 			keys = append(keys, key)
 		}
 		slices.Sort(keys)
-		if !slices.Equal(keys, want) {
-			t.Fatal("options row contains extra or missing fields")
+		// taiwan-cvs-logistics-v1 §5.1: a home row is exactly the base projection; a CVS row adds a closed, mode-dependent set.
+		// The store fixture is shared, so an unfiltered page also lists CVS rows other tests configured.
+		var kind, selection string
+		_ = json.Unmarshal(row["delivery_kind"], &kind)
+		_ = json.Unmarshal(row["pickup_selection"], &selection)
+		_, unavailable := row["available"]
+		exact := want
+		switch {
+		case kind == "home":
+		case selection == "buyer_entered":
+			exact = append(slices.Clone(want), "payment_modes", "pickup_selection", "store_search_url")
+		case selection == "ecpay_map" && unavailable:
+			exact = append(slices.Clone(want), "available", "payment_modes", "pickup_selection", "reason")
+		case selection == "ecpay_map":
+			exact = append(slices.Clone(want), "payment_modes", "pickup_selection")
+		default:
+			t.Fatalf("CVS options row without a known pickup_selection: kind=%q selection=%q", kind, selection)
+		}
+		exact = slices.Clone(exact)
+		slices.Sort(exact)
+		if !slices.Equal(keys, exact) {
+			t.Fatalf("options row contains extra or missing fields: kind=%q got=%v want=%v", kind, keys, exact)
 		}
 	}
 	return p

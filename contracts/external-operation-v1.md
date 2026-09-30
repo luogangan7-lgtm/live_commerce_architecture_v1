@@ -78,3 +78,11 @@ This supersedes the earlier dispatcher NOT_RUN status, not the historical probe'
 Still NOT_RUN: production adapters/eligibility/credentials and provider sandbox/live,
 global quotas/durable Retry-After, inbox/webhook ingress, authorized cancellation/requeue
 UI, buyer checkout, full global gates and full T06.
+
+## Amendment by claims-retention-purge-v1 (integrator, 2026-09-30, U08 merge)
+
+Recorded from `contracts/claims-retention-purge-v1.md` §6 (FROZEN 2026-09-30); that file is the source of the rows.
+
+- Clause 6 (IR-3): a terminal `meta.private_reply` operation's `request.comment_ref` and `semantic_key` may be redacted
+  by U08 only (`commerce_retention_writer`, `semantic_key LIKE 'mpr-%'`); `request_hash` stays the hash of the original
+  request.

@@ -1,0 +1,107 @@
+{
+ "verdict": "BLOCK",
+ "findings": [
+  {
+   "severity": "P1",
+   "where": "§4 (claims.meta_intake `inbox_event_id uuid UNIQUE`), §4 bullet 2 (`source_event_id` = meta_inbox.events.id), MCI05",
+   "problem": "Idempotency is keyed on the inbox event, not on the Meta comment. For comments, protocol.go emit() builds event_key from ('meta-event-v1', app, object, asset, kind, comment_id, payload_hash), so the key includes the payload hash. A redelivery whose payload differs in any byte gets a new primary ROUTED inbox event. The same holds for one IG comment delivered as both `comments` and `live_comments` (different kind). social.comment_events.comment_key is deliberately non-unique. Each such event creates a second intake row and a second claims event. Because quantities are absolute, a late duplicate of `A1+3` arriving after `A1` resets the line to 3. This violates 架构 §10.1 (composite unique key on the provider's stable id) and §11.1 (duplicate webhooks fully idempotent). MCI05 only tests byte-identical redelivery, which the inbox already dedups.",
+   "fix": "In §4, add to claims.meta_intake: `app_id text, object text, asset_id text, comment_ref text NOT NULL CHECK (comment_ref ~ '^[0-9_]{1,80}$')` and `UNIQUE (app_id, object, asset_id, comment_ref)`, a global key matching the reply semantic key. In §5.1 add: \"If an intake row for (app_id, object, asset_id, comment_ref) already exists, stage returns NULL: no second intake, job or claims event (the social fact still commits).\" In MCI05 add: \"same comment_id with a different payload_hash, and the same IG comment id as instagram_comment and instagram_live_comment → one intake, one claims event, final quantity unchanged\"."
+  },
+  {
+   "severity": "P1",
+   "where": "§5.2 (`river.river_job` INSERT of kind claims_meta_intake_v1), §5.3 (`cmd/meta-worker registers it; separate pool`), §6.2 (external_operation_v1 job from the intake tx), IR-5",
+   "problem": "This contradicts meta-runtime-isolation-v1, which this file does not list as amended. Meta jobs live in the fixed `river_meta` schema. Its insert guard admits only the exact Meta family from the ingress authority ('No non-Meta family is admissible even from the lifecycle role'). The consumer has no `river.river_job` grant. That contract also forbids a third database pool in meta-worker and cross-domain authority on Meta roles. As written, the §5.2 trigger watches the wrong table. The consumer cannot enqueue the intake job, and the intake worker in meta-worker cannot insert a main-schema external_operation_v1 job. An implementer would have to weaken the isolation guard.",
+   "fix": "Replace IR-5 with: \"The intake job is `claims_meta_intake_v1` in the main `river` schema. The consumer never enqueues it. `claims.stage_meta_intake` inserts the intake row with `job_id NULL`. A separate `cmd/worker` claims-intake worker (own `commerce_claims_intake` pool, main River client) polls PENDING rows with `FOR UPDATE SKIP LOCKED` and applies them (the IR-5 alternative). meta-runtime-isolation-v1 and meta-consumer-v1 are unchanged.\" Alternatively, add `meta-runtime-isolation-v1` to the Amends line with the exact new guard rule (family, role, args, schema) and a gate proving that no other non-Meta family becomes admissible."
+  },
+  {
+   "severity": "P1",
+   "where": "§2 (`integration.bindings (provider 'meta')`), §6.2 (`provider meta`), §6.3 (route `(meta, meta.private_reply, service)`)",
+   "problem": "This references a provider value that does not exist. Meta route bindings are `provider='facebook'` for page and `'instagram'` for IG (0028 register_route line 173). The dispatcher gate (dispatcher.go:383-384) requires `b.provider=o.provider AND b.external_asset_id=o.external_asset_id`. An operation with provider `meta` never passes the gate or matches a route, so every reply sticks or goes STALE_BINDING.",
+   "fix": "In §2: \"binding_id → integration.bindings with provider = CASE object WHEN 'page' THEN 'facebook' ELSE 'instagram' END and external_asset_id = asset_id\". In §6.2: \"provider = the source binding's provider\". In §6.3, register two routes: `(facebook, meta.private_reply, service)` and `(instagram, meta.private_reply, service)`. Also state `actor_kind='MERCHANT'`, `principal_id = claim_sources.principal_id` (the dispatcher reads only actor_kind='MERCHANT' rows)."
+  },
+  {
+   "severity": "P1",
+   "where": "§7 loader `integration.load_meta_page_token(operation, generation, lease_token)`, §6.3 Dispatch 'load Page token'",
+   "problem": "This contradicts the frozen dispatcher surface. In external-dispatcher-v1, callbacks receive 'never the lease token/hash, tenant credentials', and DispatchRequest has no lease fields. A DispatchRoute callback therefore cannot call a lease-fenced loader. Check also has no DB handle, yet it must read claim_sources, principal authority, the link and the credential head. commerce_worker has no grants for these.",
+   "fix": "Add external-dispatcher-v1 to the Amends line with: \"The dispatcher, inside its post-Check DB gate and under its own lease, calls a per-route `LoadSecret(ctx, tx, claim)` hook, which is only `integration.load_meta_page_token(op, generation, lease_token)`. It passes the decrypted token to Dispatch as a redacted, non-serializable value that is never on Check or Reconcile. Check reads state only through `integration.check_claim_reply(op uuid) RETURNS text` (definer, EXECUTE commerce_worker), which returns a fixed deny code or 'OK'.\" Add a gate: the Page token is never visible to Check or Reconcile."
+  },
+  {
+   "severity": "P1",
+   "where": "§6.2 link issuance / token derivation, §6.3 Check list",
+   "problem": "Dispatch can send a dead link and burn the only reply for that comment forever. (a) claims.links TTL is at most 72 h (0060 CHECK), but deadline_at is occurred_at+7d−1h, and Check never tests link expiry. (b) If the merchant rotates or releases via issue_link between plan and dispatch, the re-derived generation-1 token no longer matches. (c) 'Key rotation → Check denies' cannot be implemented: the frozen request has no link key id, and no runtime role may SELECT token_hash.",
+   "fix": "Add `link_key_id` to the frozen request in §6.2. Add to the Check list in §6.3: \"`claims.check_system_link(p_tenant, p_store, p_bundle, p_hash bytea) RETURNS boolean` (definer, owner commerce_claims_writer, EXECUTE commerce_worker) is true only if generation=1, token_hash=p_hash, expires_at > clock_timestamp()+10 min, and the bundle is unreleased. Check passes sha256(re-derived token) with the key named by link_key_id. A false result or a missing key id → ErrPolicyDenied.\" Set `deadline_at = least(occurred_at + 7d − 1h, link expires_at − 10 min)`. Add to MCI07: rotate before dispatch, expired link, and key-id change → BLOCKED_POLICY with zero HTTP."
+  },
+  {
+   "severity": "P1",
+   "where": "§6.3 Check ('IG destination is currently LIVE per T08 observation'), §14 known limits, MCI12",
+   "problem": "The contract references a state that does not exist. live-broadcast-v1 says audience state is always UNKNOWN, and 'Neither queued intent nor provider acceptance proves RUNNING, LIVE or ENDED'. No migration records an IG destination LIVE observation. Every instagram_live_comment reply therefore gets BLOCKED_POLICY forever, and MCI12's 'IG live comment during broadcast' send can never be met.",
+   "fix": "Replace the IG live Check clause with: \"`live_media` replies require (i) the source session's claim window OPEN at Check time and (ii) `clock_timestamp() <= received_at + 15 min`; deadline_at for live_media = received_at + 15 min. Meta's own rejection maps to FAILED_FINAL.\" Or keep the T08 rule and add: \"IG live replies are NOT_RUN until a T08 amendment defines a destination LIVE observation\". In that case remove the IG live leg from MCI12 and list it as BLOCKED."
+  },
+  {
+   "severity": "P1",
+   "where": "§4.1 roles, §5.1 stage definer ownership, §6.2 plan_claim_reply, MCI02 'privilege matrix equality'",
+   "problem": "The gate cannot be tested because the matrix it compares against does not exist, and the definers cannot work under current policies. Specifically: (a) KC03 compares claims §3.2 for exact equality, but no rows are given for commerce_claims_intake on bundles, lines, events, links, windows, intervals or offers. (b) claims.links INSERT policy `link_issue` requires `app.principal_id = principal_id`. issue_system_link would have to forge app.principal_id as the source principal, and then the `link_rotate` policy is also satisfied, which defeats the IR-9 'cannot rotate' gate. (c) plan_claim_reply is owned by commerce_integration_writer, which has no INSERT grant or policy on integration.operations, no EXECUTE on the claims definer, and no SELECT on claims or live. (d) stage_meta_intake is owned by claims_writer but must lock meta_inbox.events and read river_meta, social.comment_events and route rows. That is cross-domain authority the isolation contracts forbid.",
+   "fix": "Add §4.3, 'Exact privilege delta (KC03 and MCI02 compare for equality)', with one row per role/object/privilege/policy. Include: `link_system_issue` FOR INSERT TO commerce_claims_writer WITH CHECK (generation=1 AND (tenant_id,store_id)=claims.intake_scope() AND principal_id=(source principal)), with no UPDATE path; issue_system_link is INSERT-only (no ON CONFLICT DO UPDATE) and the intake tx never sets app.principal_id. Also include the operations INSERT policy for integration_writer (state='READY', generation=0, actor_kind='MERCHANT', action='meta.private_reply'). Split staging into two hops: `meta_inbox.stage_claim_intake` (owner commerce_meta_writer, EXECUTE consumer; validates event, job and social fact as finish_social_event does) calls `claims.insert_meta_intake` (owner claims_writer, EXECUTE commerce_meta_writer only)."
+  },
+  {
+   "severity": "P1",
+   "where": "IR-8 ruling ('amendment is recorded in live-keyword-claims-v1.md §0.1 by the implementing unit'), §4/§5.3/§6.2",
+   "problem": "This amends a FROZEN contract in more places than IR-8 lists, and lets the implementer write the amendment, against PROCESS §2.2. Unlisted changes: claims §1 ('matched only if window OPEN at ingest', relaxed by interval + grace); §3 ('no River job kind'); §3.1 shape matrix (RATE_LIMITED); §3.2 KC03 matrix; §3.3 ('release and hash replacement happen only here', since issue_system_link is a second writer); §6 (token = crypto/rand 32 bytes vs HMAC-derived; state NONE at bundle creation vs ACTIVE for meta bundles; merchant IssueLink with expected_generation=0 now gets PT409 on meta bundles); §4.3 IngestResult has no field saying the bundle was created, yet §5.3 step 3 depends on it.",
+   "fix": "Add §4.4, 'Frozen-claims amendment (integrator-frozen with this file, not by the implementer)', listing each clause above with its replacement text. Include: `IngestResult.BundleCreated bool json:\"bundle_created\"` (false on Duplicate); RATE_LIMITED row in §3.1 = grammar MATCH, offer set, quantity N, bundle NULL, plus CHECK `reason IS DISTINCT FROM 'RATE_LIMITED' OR source_kind='meta'`; §6 row 'ACTIVE (system, generation 1): entered by plan_claim_reply for meta bundles; merchant rotate uses expected_generation=1 and kills the sent link'. Change IR-8 to 'recorded by the integrator at freeze'."
+  },
+  {
+   "severity": "P2",
+   "where": "§4 live.claim_window_intervals ('append-only … written by the existing window open/close commands … Go helper')",
+   "problem": "The table is called append-only, but closed_at is updated later. Go-only maintenance lets any future close path leave an interval open, so meta comments would be accepted after close. There is also no backfill: a window that is OPEN at deploy has no interval, so all its meta comments are DROPPED.",
+   "fix": "Replace with: \"Maintained only by an AFTER INSERT OR UPDATE OF state trigger on live.claim_windows. On an OPEN transition it inserts (generation, opened_at); on OPEN→CLOSED it sets closed_at exactly once (NULL→value). No other UPDATE or DELETE grant. 0064 backfills one interval per existing generation>0 row from its current opened_at/closed_at.\" MCI06 adds a 'window OPEN at migration' case."
+  },
+  {
+   "severity": "P2",
+   "where": "§5.3 step 1 (window decision in lease_meta_intake) vs step 2 (window FOR SHARE)",
+   "problem": "The interval match is evaluated before the window row is locked. A close that commits in between is not seen. The ingest core's `occurred_at <= clock_timestamp()+120s` bound is also missing: a future occurred_at hits the claims.events CHECK (23514), which is not mapped, so the job retries until exhausted.",
+   "fix": "Move the rule into step 2: \"After locking live.claim_windows FOR SHARE, select the interval; no match, or occurred_at > clock_timestamp()+120s → DROPPED(window_closed).\" Add to the error list: 23514 → JobCancel."
+  },
+  {
+   "severity": "P2",
+   "where": "§6.3 Check ('Any failure → ErrPolicyDenied → BLOCKED_POLICY')",
+   "problem": "A transient DB timeout or a key/credential load error during Check becomes terminal BLOCKED_POLICY and permanently burns that comment's only reply.",
+   "fix": "Replace with: \"Only a definitive policy result from check_claim_reply returns ErrPolicyDenied. Infrastructure errors return a non-policy error, the dispatcher retries within its budget, and Dispatch is never called.\""
+  },
+  {
+   "severity": "P2",
+   "where": "§4.2 abuse bounds",
+   "problem": "The rolling-60 s and 5000-bundle counts have no serialization, so concurrent jobs of one actor or session can exceed them. The clock is unspecified (recorded_at would rate-limit a legitimately spaced burst replayed from a River backlog). NO_MATCH comments are staged without any bound, which breaks I23 on a viral post.",
+   "fix": "Add: \"Before counting, take `pg_advisory_xact_lock('claims-actor|t|s|session|actor_key')` and, for the session cap, `'claims-session-cap|t|s|session'` (lock order right after claim-source). The window is measured on occurred_at. Staging stops, with no intake row and an audit counter, above 50 000 intake rows per session.\""
+  },
+  {
+   "severity": "P2",
+   "where": "§3 qualification table / fail-closed list",
+   "problem": "A missing or malformed comment_id is not in the fail-closed list, so the semantic key would hash an empty comment_ref and all such comments would share one reply budget. For IG, occurred_at falls back to entry.time (delivery time), so a comment made before the window opened but delivered after it counts as inside the window.",
+   "fix": "Add to the fail-closed list: \"comment id missing or not `^[0-9_]{1,80}$`\". Add U7: \"IG comment creation time is not in the webhook value; occurred_at = entry.time is delivery time; IG window checks are delivery-time based (documented limit, MCI06 case)\"."
+  },
+  {
+   "severity": "P2",
+   "where": "§3 actor key ('startup rejects equal keys'), MCI01",
+   "problem": "K_actor is loaded only by meta-worker and COMMERCE_CLAIMS_LABEL_KEY only by cmd/api, so no single process can compare them, and the gate cannot be tested as written.",
+   "fix": "Replace with: \"Domain separation ('meta-claim-actor/v1' vs the label MAC domain) is the guarantee. Meta-worker rejects K_actor == K_link at startup.\" Change MCI01 to test K_actor ≠ K_link."
+  },
+  {
+   "severity": "P2",
+   "where": "§6.2 plan_claim_reply operation insert",
+   "problem": "Behaviour on a semantic_key conflict (23505 on UNIQUE(tenant,store,semantic_key)) is unspecified; it would roll back the whole claims apply and retry forever. The budget is also unique only per tenant/store, not globally.",
+   "fix": "Add: \"INSERT … ON CONFLICT (tenant_id,store_id,semantic_key) DO NOTHING; a conflict means no new operation and the claim still applies.\" Also add a partial global unique index on (semantic_key) WHERE action='meta.private_reply'."
+  },
+  {
+   "severity": "P2",
+   "where": "§6.2 frozen request vs 架构 §10.2 MessageIntent / I07",
+   "problem": "§10.2 requires the intent to record policy version, message type and human-takeover version, and to check per-binding private_reply capability. The request has none of these, and Check tests credential presence, not the binding's private_reply capability.",
+   "fix": "Add `policy:\"mpr-policy/v1\"` and `message_type:\"first_private_reply\"` to the request. Add to Check: \"binding private_reply capability evidence present; takeover generation = 0 (no takeover in v1)\"."
+  },
+  {
+   "severity": "P2",
+   "where": "§2 reply_locale vs ruling O6; duplicate '## 14.' headings; §7 'registry_writer-owned, EXECUTE registrar'",
+   "problem": "O6 picks the locale from the store default, while §2 stores a per-source reply_locale, and the labels differ (zh-TW vs zh-Hant). Two sections are numbered 14. No generic registry_writer exists: the only one is commerce_payment_registry_writer, and the Meta registrar is commerce_meta_registrar.",
+   "fix": "Remove `reply_locale` from §2 and use the store default locale mapped zh-Hant/zh-Hans/en, or amend O6 to say per source. Renumber the rulings as §15. In §7: \"owner commerce_integration_writer, EXECUTE commerce_meta_registrar only\"."
+  }
+ ]
+}

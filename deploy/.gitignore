@@ -1,0 +1,16 @@
+# File: deploy/.gitignore
+# Purpose: keep run output and real configuration out of git. Real env files and secrets live
+#   in /etc/live-commerce (outside the checkout); these patterns catch accidental local copies.
+# Runs as/in: git on developer/deploy hosts. Reads env / secrets: none.
+# Used by: git; smoke S06 asserts these patterns exist.
+# Status: DESIGN. Change rules: never un-ignore env/*.env or .evidence/ (smoke logs are
+#   secret-scanned but may contain host details).
+
+# smoke / deploy evidence (integrator copies selected runs to evidence/release/, I6)
+.evidence/
+
+# local overrides and copies of real configuration
+*.local.*
+env/*.env
+!env/*.env.example
+secrets/

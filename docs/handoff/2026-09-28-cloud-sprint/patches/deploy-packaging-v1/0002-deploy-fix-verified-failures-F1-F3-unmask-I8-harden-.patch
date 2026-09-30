@@ -1,0 +1,684 @@
+From f31863228f1517066b0e6d2684d7fbd1e20ec64e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 12:18:48 +0000
+Subject: [PATCH 2/4] deploy: fix verified failures F1-F3, unmask I8, harden
+ build proxy
+
+Root-cause fixes for the independent deploy verification of 22d5d3f
+(test_worker, 2026-09-28; smoke full with the I1 proposal: 41 PASS / 3 FAIL).
+
+- F2 (S34 FAIL, S21 false PASS): admin "/" answered
+  "307 Location: https://localhost:3100/zh-CN" through Caddy. Next builds
+  its request origin from HOSTNAME=127.0.0.1, while request.nextUrl
+  canonicalises 127.x to "localhost", so Next could not relativise the
+  proxy.ts locale redirect. compose.yml now wires HOSTNAME=localhost and
+  admin.Dockerfile starts node with --dns-result-order=ipv4first, so the
+  server still binds 127.0.0.1. Checked locally with the built image:
+  the redirect is now "Location: /zh-CN". S21 now asserts the Location
+  stays on the public origin and that the target returns 200 with
+  X-Frame-Options DENY. S34 asserts the final host and a 200 status.
+- F3 (S39 FAIL): post_checks waited for a ready token logged after the
+  script started, and a no-op `up -d` never prints one. The token must
+  now appear in `docker logs --since <.State.StartedAt>`, and every lc-*
+  container must run :$IMAGE_TAG. S39 now covers four rollback paths:
+  the no-op, a different tag (containers are recreated), back to the
+  original tag, and a refusal when the ledger changed.
+- F1 (S08 false negative): compare the binary names against
+  go.Dockerfile GO_CMDS + lcentry instead of counting with a regex that
+  also matched the app/bin/ directory entry.
+- I8 unmasked: the new case S29m compares the live media gate with the
+  restored one. It records BLOCKED (REQUIRES_INTEGRATOR I8) instead of
+  hiding the defect inside the S29 PASS. S31 records media_plan.
+- I1: go.Dockerfile checks every cmd/<name> before compiling. A missing
+  cmd/migrate now fails in under 1 s instead of after five builds.
+- build-images.sh: a loopback HTTPS_PROXY is unreachable from BuildKit
+  RUN steps (checked locally). LC_BUILD_NETWORK=auto builds with
+  --network host only in that case and logs the variable name, never
+  its value.
+- Docs: README deviations 10-14 and the status matrix; runbooks cover
+  the post-check semantics, the no-op rollback, S29m and an admin
+  redirect triage entry.
+
+No production deploy performed. cmd/migrate (I1), the media-gate
+migration (I8) and a path-only redirect in apps/admin/proxy.ts are
+outside deploy/** and stay REQUIRES_INTEGRATOR / app owner.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01JteRiLhGBXZ4UzNCqjoeFy
+---
+ deploy/README.md                 |  28 ++++++++-
+ deploy/compose.yml               |  11 +++-
+ deploy/docker/admin.Dockerfile   |  11 +++-
+ deploy/docker/go.Dockerfile      |   6 ++
+ deploy/scripts/build-images.sh   |  38 ++++++++++--
+ deploy/scripts/deploy.sh         |  64 ++++++++++++++-----
+ deploy/scripts/smoke-browser.mjs |  29 ++++++---
+ deploy/scripts/smoke.sh          | 103 ++++++++++++++++++++++++++-----
+ docs/runbooks/backup-restore.md  |   4 ++
+ docs/runbooks/deploy.md          |   7 ++-
+ docs/runbooks/incident.md        |   3 +
+ 11 files changed, 250 insertions(+), 54 deletions(-)
+
+diff --git a/deploy/README.md b/deploy/README.md
+index 3cacc33..f2f83dc 100644
+--- a/deploy/README.md
++++ b/deploy/README.md
+@@ -80,8 +80,9 @@ The media worker is **not deployed**, because it is MOCK-only (`worker_env.go:17
+ | Static package: syntax, shellcheck, pins, compose config (4 profile sets × 2 files), lcentry tests (96.7 %), Caddyfile validate/fmt, ignore files | **PASS** | `smoke.sh static` (S01–S06) |
+ | `smoke.sh full` | **BLOCKED** at S07: `cmd/migrate` missing (I1) | exits 3, evidence under `.evidence/` |
+ | DB layer + edge with **scratch** images: postgres (non-root, read-only, checksums, archiving), migrate ×2 over the socket, provision-logins ×2 (12 logins, matrix, TCP auth, readiness), superuser-over-TCP rejected, api/caddy healthy, worker ready tokens, Caddy internal-CA TLS, default-deny, webhook routing, 308 redirect, unknown Host not proxied, 503 + Retry-After window, hardening of 7 containers, no secret in inspect/logs, backup + restore into a new DB, WAL archiving, basebackup + `pg_verifybackup`, PITR drill (2 s), watchdog W2–W9, diagnostics bundle, graceful stop, clean teardown | **VERIFIED_LOCAL (scratch)** | Scratch `lc-go` built on the host from this tree plus the §7 `cmd/migrate` proposal (outside the worktree, not committed); real `lc-caddy` from `docker/caddy.Dockerfile`. This is not product acceptance |
+-| `lc-admin` / `lc-storefront` image builds, S20/S21/S34 | **NOT_RUN** | Build containers have no egress in the verification sandbox (pnpm/corepack need the registry) |
+-| `deploy.sh` first/upgrade/app-rollback end-to-end (S37–S39) | **NOT_RUN** | Needs all 4 images (blocked by I1 + Node builds) |
++| All 4 image builds + `smoke.sh full` with the I1 proposal (independent test_worker, 2026-09-28, scratch clone) | **FAIL → fixed, re-run NOT_RUN** | 41 PASS / 3 FAIL (S08, S34, S39). Root causes F1–F3 below are fixed in this package; S21 was a false PASS and is tightened. A full re-run needs I1 and is owed by the independent verifier |
++| `deploy.sh` first/upgrade (S37, S38) | **VERIFIED_LOCAL (scratch, I1 proposal)** | Same run; app-rollback (S39) failed on F3, fixed, re-run NOT_RUN |
++| Logical-restore media gate (S29m) | **BLOCKED (I8)** | Live `media_plan_ready=t`, restored `f`; was hidden inside S29 PASS, now its own case |
+ | Real ACME/DNS, OIDC login, PAYUNi sandbox/live, Meta webhooks, media, 2-host TLS, K8s, load, CVE scan | **NOT_RUN** | Need owner inputs (O2, O3, O11, B3–B6) |
+ 
+ ## Deploy-only dependency ledger (integrator: copy into docs/implementation/dependencies.md, I5)
+@@ -122,6 +123,24 @@ No new Go modules and no new npm packages. `lcentry` uses only the Go standard l
+ 7. `producer | grep -q` is banned under `pipefail`, because SIGPIPE caused false negatives.
+ 8. `lcentry` also rejects a secret that is empty after newline stripping.
+ 9. `host-setup.sh` installs the env templates when they are missing and never overwrites them.
++10. **Admin listener is `HOSTNAME=localhost`, not `127.0.0.1`** (F2). Next builds its request origin
++    from HOSTNAME, but `request.nextUrl` rewrites `127.x`/`[::1]` to `localhost`. With `127.0.0.1` the two
++    origins differ, so Next cannot relativise the locale redirect in `apps/admin/proxy.ts`. `/` then answered
++    `307 Location: https://localhost:3100/zh-CN` through Caddy, and browsers got connection refused.
++    `admin.Dockerfile` starts node with `--dns-result-order=ipv4first`, so `localhost` still binds 127.0.0.1
++    (the address Caddy and the healthcheck dial). Checked locally with the built image: `Location: /zh-CN`.
++    App-side hardening remains recommended: send a path-only Location. That fix is outside `deploy/**`.
++11. **Post-checks judge each container's current lifetime** (F3). A worker's ready token must appear in
++    `docker logs --since <.State.StartedAt>`, not since the script started. Every `lc-*` container must run
++    `:$IMAGE_TAG`. A no-op `up -d` (rollback to the running tag, re-running `first`) keeps containers
++    running, so no new token was printed, and the rollback died after 60 s.
++12. **S08 compares binary names, not a count** (F1). `grep -c '^app/bin/[a-z-]*$'` also counted the `app/bin/`
++    directory entry. The expected set is read from `go.Dockerfile` `ARG GO_CMDS` + `lcentry`.
++13. **Loopback build proxy** (build-images.sh). BuildKit RUN steps get their own network namespace, where a
++    proxy on the host's `127.0.0.1` refuses connections (checked locally). With `LC_BUILD_NETWORK=auto`
++    (default), the script builds with `--network host` only when a forwarded proxy variable points at
++    loopback. `default` keeps isolation and warns.
++14. `go.Dockerfile` checks every `cmd/<name>` before compiling, so I1 fails in seconds instead of after 5 builds.
+ 
+ ## Blockers and hand-offs
+ 
+@@ -133,7 +152,10 @@ No new Go modules and no new npm packages. `lcentry` uses only the Go standard l
+   - I5 dependency ledger.
+   - I6 evidence copy.
+   - I7 postgres digest refresh.
+-  - I8 restore-stable `live.media_plan_ready()`.
++  - I8 restore-stable `live.media_plan_ready()`. It keeps `smoke.sh full` at BLOCKED (S29m) even once I1
++    lands. It is not a failure of this release's services, because media is not deployed. The owner decides
++    whether a media-less release may ship with S29m BLOCKED.
++  - App hardening (not blocking once F2 is deployed): make the `apps/admin/proxy.ts` locale redirect path-only.
+ - **Owner decisions:**
+   - O1 Compose/non-HA ADR.
+   - O2 IdP.
+diff --git a/deploy/compose.yml b/deploy/compose.yml
+index b4e37e4..5c9fe85 100644
+--- a/deploy/compose.yml
++++ b/deploy/compose.yml
+@@ -204,7 +204,16 @@ services:
+       <<: *after-db
+     env_file: ["${LC_ENV_DIR:?set LC_ENV_DIR}/admin.env"]    # NODE_OPTIONS only
+     environment:
+-      HOSTNAME: "127.0.0.1"      # Docker sets HOSTNAME=<container id>; Next standalone binds to it
++      # Listener of the Next standalone server (server.js reads HOSTNAME/PORT; Docker would set
++      # HOSTNAME=<container id>). MUST be the literal name "localhost", not "127.0.0.1": Next builds
++      # its request origin from this value, while NextURL (request.nextUrl, used by
++      # apps/admin/proxy.ts for the locale redirect) canonicalises 127.x/[::1] to "localhost".
++      # With 127.0.0.1 the two origins differ, Next cannot relativise the redirect and "/" answered
++      # "307 Location: https://localhost:3100/zh-CN" through Caddy (VERIFIED_LOCAL F2, smoke
++      # S21/S34). With "localhost" Next sends "Location: /zh-CN". It still binds loopback only:
++      # admin.Dockerfile starts node with --dns-result-order=ipv4first, so "localhost" resolves to
++      # 127.0.0.1, which Caddy (reverse_proxy 127.0.0.1:3100) and the healthcheck below dial.
++      HOSTNAME: "localhost"
+       PORT: "3100"
+       COMMERCE_FIXTURE_ENABLED: "0"
+       COMMERCE_IDENTITY_ENABLED: ${LC_IDENTITY_ENABLED:-0}
+diff --git a/deploy/docker/admin.Dockerfile b/deploy/docker/admin.Dockerfile
+index 3f9c505..68b8cb8 100644
+--- a/deploy/docker/admin.Dockerfile
++++ b/deploy/docker/admin.Dockerfile
+@@ -4,8 +4,9 @@
+ # Runs as/in: build host; runtime user 1000 ("node" in the base image), read-only rootfs.
+ # Reads env (build): COMMERCE_IDENTITY_ENABLED=0 COMMERCE_FIXTURE_ENABLED=0 are forced for the
+ #   build exactly like scripts/dev/test-local.sh (the tested build never needs an IdP or DB).
+-# Reads env (runtime, wired in deploy/compose.yml): HOSTNAME=127.0.0.1 and PORT=3100 (listener;
+-#   Docker would otherwise set HOSTNAME to the container id), COMMERCE_IDENTITY_ENABLED,
++# Reads env (runtime, wired in deploy/compose.yml): HOSTNAME=localhost and PORT=3100 (listener;
++#   Docker would otherwise set HOSTNAME to the container id; "localhost" rather than 127.0.0.1 so
++#   Next relativises same-origin redirects, see compose.yml admin), COMMERCE_IDENTITY_ENABLED,
+ #   COMMERCE_PUBLIC_ORIGIN, COMMERCE_API_ORIGIN, COMMERCE_OIDC_ISSUER, COMMERCE_ONBOARDING_*,
+ #   COMMERCE_FIXTURE_ENABLED=0 (apps/admin/lib/auth.ts, lib/backend.ts).
+ # Reads secrets: /run/secrets/commerce_bff_key via COMMERCE_BFF_KEY_FILE, expanded by lcentry.
+@@ -62,7 +63,11 @@ USER 1000:1000
+ WORKDIR /app/apps/admin
+ ENTRYPOINT ["/usr/local/bin/lcentry","run","--"]
+ # Run server.js directly: scripts/dev/start-admin.mjs is local-only by its own comment.
+-CMD ["/usr/local/bin/node","server.js"]
++# --dns-result-order=ipv4first: HOSTNAME=localhost (compose.yml) must bind 127.0.0.1, the address
++#   Caddy and the healthcheck dial. Node's default "verbatim" order could pick ::1 on hosts with
++#   IPv6 loopback, and the edge would then get "connection refused". The flag is here and not in
++#   NODE_OPTIONS because admin.env owns NODE_OPTIONS (operator knob, preflight P06).
++CMD ["/usr/local/bin/node","--dns-result-order=ipv4first","server.js"]
+ ARG GIT_SHA=unknown
+ LABEL org.opencontainers.image.title="lc-admin" \
+       org.opencontainers.image.revision=$GIT_SHA \
+diff --git a/deploy/docker/go.Dockerfile b/deploy/docker/go.Dockerfile
+index 02dfb03..253dde3 100644
+--- a/deploy/docker/go.Dockerfile
++++ b/deploy/docker/go.Dockerfile
+@@ -17,6 +17,8 @@
+ # Change rules: digest bump -> re-resolve with `docker buildx imagetools inspect`, update the
+ #   ledger in deploy/README.md, re-run `deploy/scripts/smoke.sh full`. Never add `-s -w`
+ #   (keep symbols for diagnosable stacks). Never add a HEALTHCHECK here (workers have none).
++#   smoke S08 reads the expected binary list from the one-line `ARG GO_CMDS="..."` below (+ lcentry):
++#   keep that line format, or S08 fails.
+ 
+ # golang 1.27.1 (matches go.mod `go 1.27.1`), Debian 13; resolved 2026-09-28.
+ ARG GO_IMAGE=golang:1.27.1-trixie@sha256:433790e515d27dc6003e847e644cc0af956985cf315c1c58a3b73ee2dd305183
+@@ -39,10 +41,14 @@ COPY deploy/tools ./deploy/tools
+ ARG GO_CMDS="api payment-worker expiry-worker meta-worker media-worker migrate"
+ # -buildvcs=false: .git is excluded by .dockerignore; the revision goes into the OCI label.
+ # -ldflags=-buildid= : reproducible output for identical inputs.
++# Every cmd/<name> is checked BEFORE anything compiles, so a missing one (I1: cmd/migrate) fails
++# in seconds with exit 3 instead of after five full builds (VERIFIED_LOCAL 2026-09-28).
+ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+     set -eu; \
+     for c in $GO_CMDS; do \
+       test -d "cmd/$c" || { echo "BLOCKED: cmd/$c missing (REQUIRES_INTEGRATOR)"; exit 3; }; \
++    done; \
++    for c in $GO_CMDS; do \
+       go build -buildvcs=false -ldflags=-buildid= -o "/out/$c" "./cmd/$c"; \
+     done; \
+     go build -buildvcs=false -ldflags=-buildid= -o /out/lcentry ./deploy/tools/lcentry
+diff --git a/deploy/scripts/build-images.sh b/deploy/scripts/build-images.sh
+index 33d6d22..9f694b0 100755
+--- a/deploy/scripts/build-images.sh
++++ b/deploy/scripts/build-images.sh
+@@ -7,12 +7,20 @@
+ #   (.dockerignore filters it); caddy uses deploy/docker as context.
+ # Reads env: LC_IMAGE_PREFIX (default lc); HTTP_PROXY/HTTPS_PROXY/NO_PROXY are passed as build
+ #   args only when set (Docker predefined args; not persisted in image config).
++#   LC_BUILD_NETWORK = auto (default) | default | host: network of the RUN steps. BuildKit runs
++#   them in their own network namespace, where a proxy on the build host's LOOPBACK
++#   (http://127.0.0.1:PORT, localhost, [::1]) is unreachable (VERIFIED_LOCAL 2026-09-28:
++#   ECONNREFUSED; builds only worked because the needed hosts were in NO_PROXY). "auto" therefore
++#   builds with `--network host` exactly when a forwarded proxy variable points at loopback, and
++#   says so; otherwise the default isolated build network is kept. The network choice affects only
++#   the build, never the image.
+ # Reads secrets: none — images never contain secrets or env files.
+ # Used by: operators before deploy.sh (IMAGE_TAG in compose.env = printed tag), smoke.sh S07.
+ # Depends on: deploy/docker/*.Dockerfile, git (commit id), docker.
+ # Exit: 0 built, 1 build failed, 3 BLOCKED (cmd/migrate missing = REQUIRES_INTEGRATOR I1;
+ #   the Go image would be undeployable without it, so nothing is faked).
+-# Status: DESIGN; S07 is BLOCKED until cmd/migrate lands.
++# Status: DESIGN; S07 is BLOCKED until cmd/migrate lands. With the I1 proposal applied, all four
++#   images built (VERIFIED_LOCAL 2026-09-28, sandbox CA base images passed via GO_IMAGE/NODE_IMAGE).
+ # Change rules: keep tags immutable (never reuse a tag for different content; "-dirty" tags are
+ #   for rehearsal only and must not be deployed to production).
+ set -Eeuo pipefail
+@@ -50,14 +58,34 @@ for img in "${only[@]}"; do
+   fi
+ done
+ 
+-proxy_args=()
++proxy_args=() loopback_proxy=""
+ for v in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+-  [[ -n "${!v:-}" ]] && proxy_args+=(--build-arg "$v")
++  [[ -n "${!v:-}" ]] || continue
++  proxy_args+=(--build-arg "$v")
++  # Proxy URL host = text after "scheme://" and optional "user:pass@", up to ":port" or "/".
++  # Only the variable NAME is logged, never the value (it may carry credentials).
++  if [[ "$v" != [Nn][Oo]_* && "${!v}" =~ ^[A-Za-z0-9+.-]+://([^/@]*@)?(\[::1\]|localhost|127\.[0-9.]+)(:|/|$) ]]; then
++    loopback_proxy+=" $v"
++  fi
+ done
++net_args=()
++case "${LC_BUILD_NETWORK:-auto}" in
++auto)
++  if [[ -n "$loopback_proxy" ]]; then
++    net_args=(--network host)
++    lc_warn "proxy variable(s)${loopback_proxy} point at host loopback, unreachable from the isolated build network: building with --network host (set LC_BUILD_NETWORK=default to refuse)"
++  fi
++  ;;
++host) net_args=(--network host) ;;
++default)
++  [[ -z "$loopback_proxy" ]] || lc_warn "proxy variable(s)${loopback_proxy} point at host loopback and LC_BUILD_NETWORK=default: RUN steps cannot reach that proxy"
++  ;;
++*) lc_die "LC_BUILD_NETWORK must be auto, default or host" 2 ;;
++esac
+ 
+ build() { # name dockerfile context
+-  lc_info "building $prefix-$1:$tag"
+-  docker build --pull=false -f "$2" -t "$prefix-$1:$tag" --build-arg "GIT_SHA=$sha" "${proxy_args[@]}" "$3"
++  lc_info "building $prefix-$1:$tag${net_args[*]:+ (${net_args[*]})}"
++  docker build --pull=false "${net_args[@]}" -f "$2" -t "$prefix-$1:$tag" --build-arg "GIT_SHA=$sha" "${proxy_args[@]}" "$3"
+ }
+ for img in "${only[@]}"; do
+   case "$img" in
+diff --git a/deploy/scripts/deploy.sh b/deploy/scripts/deploy.sh
+index b46a7de..8af6d69 100755
+--- a/deploy/scripts/deploy.sh
++++ b/deploy/scripts/deploy.sh
+@@ -7,7 +7,10 @@
+ #                       answering 503 + Retry-After) -> migrate(new tag) -> provision -> up -d
+ #                       -> post checks -> log. Never auto-rolls back or restores.
+ #   app-rollback <tag>  allowed ONLY if the migration ledger count equals the one recorded when
+-#                       <tag> was last deployed; otherwise refuses ("forward-fix only").
++#                       <tag> was last deployed; otherwise refuses ("forward-fix only"). Then
++#                       up -d (recreates only containers whose image/config changed) -> post
++#                       checks -> log. Rolling back to the tag that is already running is a
++#                       valid no-op and must pass (post_checks judges the current lifetime).
+ # Usage: deploy.sh [--smoke] first | upgrade <tag> | app-rollback <tag>
+ #   --smoke: used by smoke.sh S37-S39 — public checks use --resolve to 127.0.0.1 and Caddy's
+ #   local CA instead of real DNS/ACME.
+@@ -21,7 +24,9 @@
+ # Depends on: preflight.sh, pg-ops.sh (backup), lib.sh; images from build-images.sh.
+ # Exit: 0 ok; 1 failed (prints the rollback decision tree); 75 migration lock busy (retry
+ #   later by hand, never in a loop); 2 usage.
+-# Status: DESIGN; S37-S39 BLOCKED until cmd/migrate exists.
++# Status: DESIGN; S37-S39 BLOCKED until cmd/migrate exists (I1). With the I1 proposal applied
++#   (VERIFIED_LOCAL 2026-09-28) S37/S38 passed and S39 failed on the no-op rollback (F3, fixed in
++#   post_checks); S39 now also rolls back to a genuinely different tag and back.
+ # Change rules: keep the order migrate -> provision -> start (架构.md §22.1 line 731); never add
+ #   automatic DB restore; edge-netns must never be targeted alone.
+ set -Eeuo pipefail
+@@ -91,31 +96,59 @@ wait_postgres() {
+   lc_die "postgres not healthy after 180 s"
+ }
+ 
+-# post_checks — health of long-running services, worker ready tokens, public HTTPS.
++# post_checks — proves that the stack running NOW is the one IMAGE_TAG describes, and is ready:
++#   1. every long-running service is running (and healthy where it has a healthcheck);
++#   2. every container built from our images (${LC_IMAGE_PREFIX:-lc}-*) runs exactly :$IMAGE_TAG,
++#      so a stale container can never pass for the target release;
++#   3. every active worker logged its ready token during its CURRENT lifetime, i.e. since that
++#      container's own .State.StartedAt (floored to the second: the daemon may stamp the first log
++#      line a hair before it records StartedAt). NOT "since this script started": `up -d` leaves
++#      unchanged containers running (no-op app-rollback to the running tag, a re-run of `first`),
++#      and those printed their token when they started (VERIFIED_LOCAL F3: smoke S39 waited 60 s
++#      for a fresh token that a no-op `up -d` never produces). A recreated/restarted container
++#      has a new StartedAt, so its token must be new as well.
++#   4. the public HTTPS edge answers /healthz (below).
+ post_checks() {
+-  local since=$1 s cid status i ok token curl_args=()
++  local s cid status i ok bad token image started prefix="${LC_IMAGE_PREFIX:-lc}-" curl_args=()
+   for ((i = 0; i < 40; i++)); do
+-    ok=1
++    ok=1 bad=""
+     while IFS= read -r s; do
+       cid=$(lc_compose ps -q "$s" 2>/dev/null)
+-      [[ -n "$cid" ]] || { ok=0 && continue; }
++      if [[ -z "$cid" ]]; then
++        ok=0 bad+=" $s=absent"
++        continue
++      fi
+       status=$(docker inspect -f '{{.State.Status}}/{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid")
+-      [[ "$status" == running/healthy || "$status" == running/none ]] || ok=0
++      [[ "$status" == running/healthy || "$status" == running/none ]] || { ok=0 bad+=" $s=$status"; }
+     done < <(lc_long_running_services)
+     ((ok)) && break
+     sleep 3
+   done
+-  ((ok)) || lc_die "post-check: not all services running/healthy (docker compose ps)"
++  ((ok)) || lc_die "post-check: not all services running/healthy:$bad (docker compose ps)"
++  while IFS= read -r s; do
++    image=$(docker inspect -f '{{.Config.Image}}' "$(lc_compose ps -q "$s")")
++    if [[ "$image" == "$prefix"* && "$image" != *":$IMAGE_TAG" ]]; then
++      lc_die "post-check: $s runs $image, expected tag $IMAGE_TAG (stale container)"
++    fi
++  done < <(lc_long_running_services)
++  lc_info "post-check all ${prefix}* containers run tag $IMAGE_TAG"
+   for s in expiry-worker:expiry_worker_ready payment-worker-sandbox:payment_worker_ready \
+     payment-worker-live:payment_worker_ready meta-worker:meta_worker_ready; do
+     token=${s#*:} s=${s%%:*}
+     lc_service_active "$s" || continue
+     for ((i = 0; i < 30; i++)); do
+-      grep -q "$token" < <(lc_compose logs --no-log-prefix --since "$since" "$s" 2>&1) && break
++      cid=$(lc_compose ps -q "$s" 2>/dev/null)
++      if [[ -n "$cid" ]]; then
++        # Re-read every round: a crash-looping worker gets a new StartedAt on each restart.
++        started=$(docker inspect -f '{{.State.StartedAt}}' "$cid")
++        started=${started%%.*}
++        started=${started%Z}Z
++        grep -q "$token" < <(docker logs --since "$started" "$cid" 2>&1) && break
++      fi
+       sleep 2
+     done
+-    ((i < 30)) || lc_die "post-check: $s did not log $token within 60 s"
+-    lc_info "post-check $s ready"
++    ((i < 30)) || lc_die "post-check: $s did not log $token in its current lifetime within 60 s"
++    lc_info "post-check $s ready (token since container start $started)"
+   done
+   if lc_service_active caddy; then
+     if ((smoke)); then
+@@ -155,20 +188,18 @@ images_present() {
+ 
+ case "$action" in
+ first)
+-  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+   if ((smoke)); then "$LC_SCRIPTS_DIR/preflight.sh"; else "$LC_SCRIPTS_DIR/preflight.sh" --online; fi
+   images_present
+   wait_postgres
+   run_migrate
+   run_provision
+   lc_compose up -d
+-  post_checks "$since"
++  post_checks
+   log_deploy first
+   ;;
+ upgrade)
+   [[ "$arg" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || lc_die "usage: deploy.sh upgrade <tag>" 2
+   export IMAGE_TAG=$arg
+-  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+   "$LC_SCRIPTS_DIR/preflight.sh"
+   images_present
+   "$LC_SCRIPTS_DIR/pg-ops.sh" backup --tag "pre-upgrade-$IMAGE_TAG" || lc_die "mandatory pre-upgrade backup failed; nothing was changed"
+@@ -179,7 +210,7 @@ upgrade)
+   run_migrate
+   run_provision
+   lc_compose up -d
+-  post_checks "$since"
++  post_checks
+   lc_info "ledger_count before=$before after=$(lc_ledger_count)"
+   log_deploy upgrade
+   ;;
+@@ -195,10 +226,9 @@ app-rollback)
+     exit 1
+   fi
+   export IMAGE_TAG=$arg
+-  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+   images_present
+   lc_compose up -d
+-  post_checks "$since"
++  post_checks
+   log_deploy app-rollback
+   ;;
+ *)
+diff --git a/deploy/scripts/smoke-browser.mjs b/deploy/scripts/smoke-browser.mjs
+index 31ddb0e..1a36748 100644
+--- a/deploy/scripts/smoke-browser.mjs
++++ b/deploy/scripts/smoke-browser.mjs
+@@ -1,7 +1,8 @@
+ // File: deploy/scripts/smoke-browser.mjs
+ // Purpose: smoke case S34 (optional): drive real Chromium THROUGH THE CADDY EDGE of a running
+ //   smoke stack (not the dev servers): the storefront neutral return page must render and the
+-//   merchant admin "/" must load without console errors. Screenshots go to the evidence dir.
++//   merchant admin "/" must follow its locale redirect on the public host to a 200 page without
++//   console errors. Screenshots go to the evidence dir.
+ //   TLS validity is covered by S17 (curl + Caddy local root), so ignoreHTTPSErrors is used here.
+ // Runs as/in: developer host, invoked by deploy/scripts/smoke.sh full (after S17-S24).
+ // Reads env: SMOKE_HTTPS_PORT (edge port, default 443), SMOKE_EVIDENCE_DIR (screenshots/output).
+@@ -9,7 +10,8 @@
+ // Used by: smoke.sh S34. Depends on: the repo's pinned @playwright/test (package.json devDependency
+ //   1.63.0) and its Chromium build (`pnpm exec playwright install chromium`); no new dependency.
+ // Exit: 0 pass, 1 fail, 3 NOT_RUN (Chromium not installed).
+-// Status: DESIGN; NOT_RUN until the full smoke can run (blocked by cmd/migrate, I1).
++// Status: DESIGN; NOT_RUN until the full smoke can run (blocked by cmd/migrate, I1). With the I1
++//   proposal applied it FAILED on the admin redirect (F2, fixed in compose.yml/admin.Dockerfile).
+ // Change rules: this is deployment proof only; business browser gates stay in
+ //   scripts/dev/test-local.sh --browser-* (app proof).
+ import { mkdir } from "node:fs/promises";
+@@ -53,12 +55,25 @@ try {
+   if (!(await page.getByTestId("payment-return").isVisible())) failures.push("payment-return not visible");
+   await page.screenshot({ path: path.join(outDir, "storefront-payment-return.png"), fullPage: true });
+ 
++  // Admin "/" answers a locale redirect. The browser must follow it on the PUBLIC host and land on
++  // a 200 page: a redirect to the internal listener (https://localhost:3100/..., VERIFIED_LOCAL
++  // F2) used to throw ERR_CONNECTION_REFUSED here, and "status < 500" alone never caught it.
+   consoleErrors.length = 0;
+-  const admin = await page.goto(`https://admin.localhost${suffix}/`);
+-  if (!admin || admin.status() >= 500) failures.push(`admin status ${admin?.status()}`);
+-  await page.waitForLoadState("networkidle");
+-  await page.screenshot({ path: path.join(outDir, "admin-root.png"), fullPage: true });
+-  if (consoleErrors.length) failures.push(`admin console errors: ${consoleErrors.length}`);
++  const adminHost = `admin.localhost${suffix}`;
++  let admin = null;
++  try {
++    admin = await page.goto(`https://${adminHost}/`);
++  } catch (err) {
++    failures.push(`admin navigation failed: ${String(err).split("\n")[0].slice(0, 200)}`);
++  }
++  if (admin) {
++    const landed = new URL(page.url());
++    if (admin.status() !== 200) failures.push(`admin status ${admin.status()}`);
++    if (landed.host !== adminHost) failures.push(`admin redirect left the public host: ${landed.host}`);
++    await page.waitForLoadState("networkidle");
++    await page.screenshot({ path: path.join(outDir, "admin-root.png"), fullPage: true });
++    if (consoleErrors.length) failures.push(`admin console errors: ${consoleErrors.length}`);
++  }
+ } finally {
+   await browser.close();
+ }
+diff --git a/deploy/scripts/smoke.sh b/deploy/scripts/smoke.sh
+index 255f697..c6d184c 100755
+--- a/deploy/scripts/smoke.sh
++++ b/deploy/scripts/smoke.sh
+@@ -9,7 +9,8 @@
+ #           buyer=1, buyer_payment=0, meta_webhook=0, studio=0. It touches ONLY its own
+ #           project and removes its containers/volumes/networks/temp dirs at the end.
+ # Usage: smoke.sh static | full
+-# Exit: 0 PASS, 1 FAIL, 3 BLOCKED (e.g. cmd/migrate missing, ports busy, docker missing).
++# Exit: 0 PASS, 1 FAIL, 3 BLOCKED (e.g. cmd/migrate missing, ports busy, docker missing, or a
++#   REQUIRES_INTEGRATOR item observed at runtime: S29m = I8). result.json "not_run" names each one.
+ # Evidence: deploy/.evidence/<run_id>/result.json (fields per 架构.md line 992) + logs/ +
+ #   cases.tsv + commands.tsv. Logs are secret-scanned before the temp secrets are deleted.
+ # Runs as/in: developer/deploy host. `full` needs root (chown 999 for the backup dir) and free
+@@ -19,7 +20,11 @@
+ # Used by: operators, test_worker/security_reviewer acceptance, CI (static).
+ # Depends on: bash, docker + compose, go (S04), python3, curl, openssl, node + repo Playwright
+ #   (S34 optional), every other deploy/scripts/*.sh.
+-# Status: DESIGN. static = runnable now; full = BLOCKED at S07 until cmd/migrate exists (I1).
++# Status: DESIGN. static = runnable now; full = BLOCKED at S07 until cmd/migrate exists (I1), and
++#   BLOCKED at S29m until the restore-stable media gate lands (I8). VERIFIED_LOCAL 2026-09-28 with
++#   the I1 proposal: S08 (count regex), S21 (never checked Location), S34 (admin redirect leaked
++#   the internal listener) and S39 (no-op rollback post-check) failed; all four are fixed here or
++#   in compose.yml/admin.Dockerfile/deploy.sh.
+ # Change rules: never delete/relax a case to get green; a new deploy file needs a case here.
+ set -Eeuo pipefail
+ # shellcheck source-path=SCRIPTDIR source=lib.sh
+@@ -169,7 +174,7 @@ EOF
+ }
+ 
+ # ================================ full ============================================================
+-ALL_FULL=(S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S30 S31 S32 S33 S34 S35 S36 S37 S38 S39)
++ALL_FULL=(S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S29m S30 S31 S32 S33 S34 S35 S36 S37 S38 S39)
+ block_rest() { # reason — mark every full case not yet recorded as BLOCKED
+   local id
+   for id in "${ALL_FULL[@]}"; do
+@@ -218,13 +223,22 @@ full_cases() {
+   rec S07 PASS "4 images tag=$SMOKE_TAG"
+ 
+   # S08 image posture
+-  local p="${LC_IMAGE_PREFIX:-lc}" users bins caps
++  # lc-go must hold EXACTLY the binaries go.Dockerfile builds (ARG GO_CMDS) + lcentry. Compare
++  # names, not a count: the tar listing also has the directory entry "app/bin/", which a `*`
++  # regex counted as an 8th binary (VERIFIED_LOCAL F1); `\+` needs at least one name character.
++  local p="${LC_IMAGE_PREFIX:-lc}" users bins want_bins caps cid
+   users="$(for i in go admin storefront caddy; do docker image inspect -f '{{.Config.User}}' "$p-$i:$SMOKE_TAG"; done | tr '\n' ' ')"
+-  bins=$(cid=$(docker create "$p-go:$SMOKE_TAG") && docker export "$cid" | tar -t | grep -c '^app/bin/[a-z-]*$'; docker rm "$cid" >/dev/null)
++  want_bins=$({
++    sed -n 's/^ARG GO_CMDS="\(.*\)"$/\1/p' "$LC_DEPLOY_DIR/docker/go.Dockerfile" | tr ' ' '\n'
++    echo lcentry
++  } | sort | tr '\n' ' ')
++  cid=$(docker create "$p-go:$SMOKE_TAG")
++  bins=$(docker export "$cid" | tar -t | sed -n 's#^app/bin/\([a-z-]\+\)$#\1#p' | sort | tr '\n' ' ')
++  docker rm "$cid" >/dev/null
+   caps=$(docker run --rm --entrypoint getcap "$p-caddy:$SMOKE_TAG" /usr/bin/caddy 2>&1 || true)
+-  if [[ "$users" == "65532:65532 1000:1000 1000:1000 10001:10001 " && "$bins" == 7 && -z "$caps" ]]; then
+-    rec S08 PASS "users ok, lc-go binaries=7, caddy file caps removed"
+-  else rec S08 FAIL "users=[$users] bins=$bins caps=[$caps]"; fi
++  if [[ "$users" == "65532:65532 1000:1000 1000:1000 10001:10001 " && "$bins" == "$want_bins" && "$want_bins" == *migrate* && -z "$caps" ]]; then
++    rec S08 PASS "users ok, lc-go binaries=[${bins% }], caddy file caps removed"
++  else rec S08 FAIL "users=[$users] bins=[$bins] want=[$want_bins] caps=[$caps]"; fi
+ 
+   # temp config
+   SMOKE_ROOT=$(mktemp -d /tmp/lc-smoke.XXXXXX)
+@@ -345,8 +359,27 @@ full_cases() {
+     rec S20 FAIL "got $r"
+     rec S23 FAIL "not evaluated (S20 failed)"
+   fi
++  # S21 admin "/": a locale redirect must stay on the PUBLIC origin (relative Location, or absolute
++  # on https://admin.localhost[:port]/), and its target must render 200 with X-Frame-Options DENY.
++  # "Any status < 500" was not enough: the redirect leaked https://localhost:3100/ (the internal
++  # listener) and the browser failed (VERIFIED_LOCAL F2; fixed by HOSTNAME=localhost in compose.yml).
++  local code loc xfo target="" admin_origin="https://admin.localhost"
++  ((HTTPS_PORT == 443)) || admin_origin+=":$HTTPS_PORT"
+   r=$(edge admin.localhost /)
+-  if ((${r%%|*} > 0 && ${r%%|*} < 500)) && [[ "$(hdr x-frame-options)" == DENY ]]; then rec S21 PASS "admin / ${r%%|*} + X-Frame-Options DENY"; else rec S21 FAIL "got $r xfo=$(hdr x-frame-options)"; fi
++  code=${r%%|*} loc=$(hdr location) xfo=$(hdr x-frame-options)
++  case "$code" in
++  200) target=/ ;;
++  301 | 302 | 303 | 307 | 308)
++    if [[ "$loc" == /* && "$loc" != //* ]]; then
++      target=$loc
++    elif [[ "$loc" == "$admin_origin"/* ]]; then target=${loc#"$admin_origin"}; fi
++    ;;
++  esac
++  r1="not-fetched"
++  [[ -z "$target" ]] || r1=$(edge admin.localhost "$target")
++  if [[ -n "$target" && "$xfo" == DENY && "${r1%%|*}" == 200 && "$(hdr x-frame-options)" == DENY ]]; then
++    rec S21 PASS "admin / $code -> ${loc:-/} -> 200, X-Frame-Options DENY"
++  else rec S21 FAIL "admin / $code location=[$loc] (must be relative or $admin_origin/...) xfo=[$xfo] target=[$r1]"; fi
+   r1=$("${CURL[@]}" -o /dev/null -w '%{http_code} %{redirect_url}' --resolve "shop.localhost:$HTTP_PORT:127.0.0.1" "http://shop.localhost:$HTTP_PORT/" || true)
+   r2=$("${CURL[@]}" -o "$EV/logs/body" -D "$EV/logs/headers" -w '%{http_code}|%{size_download}' -H 'Host: unknown.example' "http://127.0.0.1:$HTTP_PORT/" || true)
+   if [[ "$r1" == "308 https://shop.localhost"* && "${r2#*|}" == 0 && -z "$(hdr x-frame-options)" ]]; then
+@@ -395,6 +428,19 @@ full_cases() {
+     grep -q 'verify.result=PASS' "$EV/logs/S29.log"; then
+     rec S29 PASS "restore into new DB, verify.sql PASS, dropped"
+   else rec S29 FAIL "restore-dump (logs/S29.log)"; fi
++  # S29m (I8 made visible): verify.sql only REQUIRES the media gate with LC_REQUIRE_MEDIA_GATE=1
++  # (default 0: studio/media are not deployable in this release), so S29 passes although a logical
++  # restore turns live.media_plan_ready() t -> f. Record that separately and honestly instead of
++  # hiding it inside S29: BLOCKED (REQUIRES_INTEGRATOR I8) until migrations/ ship a restore-stable
++  # gate; PASS once the restored value matches the live one.
++  local live_media restored_media
++  live_media=$(lc_psql <<<"SELECT live.media_plan_ready();" 2>>"$EV/logs/S29.log" || true)
++  restored_media=$({ grep -o 'media_plan=[tf]' "$EV/logs/S29.log" || true; } | tail -n1 | cut -d= -f2)
++  if [[ "$live_media" == t && "$restored_media" == t ]]; then
++    rec S29m PASS "media gate live=t restored=t (I8 fixed: make LC_REQUIRE_MEDIA_GATE=1 the default)"
++  elif [[ "$live_media" == t && "$restored_media" == f ]]; then
++    rec S29m BLOCKED "REQUIRES_INTEGRATOR I8: logical restore turns live.media_plan_ready() t->f (not required while LC_REQUIRE_MEDIA_GATE=0)"
++  else rec S29m FAIL "media gate live=[${live_media}] restored=[${restored_media}] (logs/S29.log)"; fi
+   local a0 a1 f1
+   a0=$(lc_psql <<<"SELECT archived_count FROM pg_stat_archiver;")
+   lc_psql <<<"SELECT pg_logical_emit_message(false, 'lc-smoke', 'wal'); SELECT pg_switch_wal();" >/dev/null
+@@ -421,7 +467,8 @@ full_cases() {
+   done
+   if runc S31 "$LC_SCRIPTS_DIR/pg-ops.sh" restore-pitr --target-time "$target" --drill && grep -q 'verify.result=PASS' "$EV/logs/S31.log"; then
+     out=$(grep -o 'pitr_duration_seconds=[0-9]*' "$EV/logs/S31.log" | tail -n1)
+-    rec S31 PASS "PITR drill paused at target, verify PASS, $out (RTO sample)"
++    out+=" $({ grep -o 'media_plan=[tf]' "$EV/logs/S31.log" || true; } | tail -n1)"
++    rec S31 PASS "PITR drill paused at target, verify PASS, $out (RTO sample; physical restore keeps the media gate)"
+   else rec S31 FAIL "restore-pitr drill (logs/S31.log)"; fi
+ 
+   # S34 browser (optional)
+@@ -470,13 +517,35 @@ full_cases() {
+     rec S38 FAIL "deploy.sh upgrade (logs/S38.log)"
+   fi
+ 
+-  # S39 app-rollback allowed / refused
++  # S39 app-rollback, all four branches:
++  #   a) to the tag that is already running: `up -d` is a no-op, post-checks must accept the ready
++  #      tokens of the current container lifetimes (VERIFIED_LOCAL F3 hung here for 60 s);
++  #   b) to a genuinely different tag ("<SMOKE_TAG>-rb", a retag of the same images recorded with
++  #      the current ledger): every lc-* container is recreated and must run the -rb tag;
++  #   c) back to SMOKE_TAG (recreate again);
++  #   d) to a tag recorded with a different ledger count: REFUSED ("forward-fix only").
++  # The -rb tags are removed afterwards (they only name existing images; nothing is rebuilt).
++  local rb_tag="${SMOKE_TAG}-rb" why=""
++  for i in go admin storefront caddy; do docker tag "$p-$i:$SMOKE_TAG" "$p-$i:$rb_tag"; done
++  printf '%s\tupgrade\t%s\t%s\t%s\n' "$(lc_ts)" "$rb_tag" "$(lc_ledger_count)" smoke >>"$LC_STATE_DIR/deployments.log"
+   printf '%s\tupgrade\t%s\t%s\t%s\n' "$(lc_ts)" smoke-fabricated 1 smoke >>"$LC_STATE_DIR/deployments.log"
+-  if runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$SMOKE_TAG"; then
+-    if runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback smoke-fabricated; then rec S39 FAIL "rollback with changed ledger was allowed"; elif grep -q REFUSED "$EV/logs/S39.log"; then
+-      rec S39 PASS "rollback allowed when ledger unchanged, refused otherwise"
+-    else rec S39 FAIL "refusal message missing (logs/S39.log)"; fi
+-  else rec S39 FAIL "rollback with unchanged ledger failed (logs/S39.log)"; fi
++  if ! runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$SMOKE_TAG"; then
++    why="a) no-op rollback to the running tag failed"
++  elif ! runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$rb_tag"; then
++    why="b) rollback to a different tag failed"
++  elif [[ "$(docker inspect -f '{{.Config.Image}}' "$(lc_compose ps -q api)")" != "$p-go:$rb_tag" ]]; then
++    why="b) api was not recreated on $rb_tag"
++  elif ! runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$SMOKE_TAG"; then
++    why="c) rollback back to $SMOKE_TAG failed"
++  elif runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback smoke-fabricated; then
++    why="d) rollback with a changed ledger was allowed"
++  elif ! grep -q REFUSED "$EV/logs/S39.log"; then
++    why="d) refusal message missing"
++  fi
++  for i in go admin storefront caddy; do docker image rm "$p-$i:$rb_tag" >/dev/null 2>&1 || true; done
++  if [[ -z "$why" ]]; then
++    rec S39 PASS "rollback: no-op to running tag, to a different tag (recreated), back, refused on changed ledger"
++  else rec S39 FAIL "$why (logs/S39.log)"; fi
+ 
+   # S32 graceful stop
+   runc S32 lc_compose stop || true
+@@ -521,7 +590,7 @@ def ver(cmd):
+     except Exception:
+         return "unavailable"
+ static_ids = ["S01", "S02", "S03", "S04", "S05", "S06"]
+-full_ids = static_ids + ["S%02d" % i for i in range(7, 40)] + ["S10a", "S10b", "S10c", "S10d", "S10e"]
++full_ids = static_ids + ["S%02d" % i for i in range(7, 40)] + ["S10a", "S10b", "S10c", "S10d", "S10e", "S29m"]
+ result = {
+     "run_id": os.path.basename(ev), "task_id": "T22", "commit": commit,
+     "environment": {"mode": mode, "host": platform.node(), "kernel": platform.release(),
+diff --git a/docs/runbooks/backup-restore.md b/docs/runbooks/backup-restore.md
+index 5df3e93..e5ee179 100644
+--- a/docs/runbooks/backup-restore.md
++++ b/docs/runbooks/backup-restore.md
+@@ -60,6 +60,10 @@ cd ${LC_BACKUP_DIR}/dumps/<目录> && sha256sum -c SHA256SUMS
+ - **已知现象（I8）**：逻辑恢复后的库中 `live.media_plan_ready()` 一定为 false。
+   原因是该函数固定了约束定义的 md5，而 PostgreSQL 在重新解析时会展开 BETWEEN 产生的嵌套 AND。
+   物理备份/PITR 不受影响。Studio/媒体当前未部署，所以默认只作提示；设置 `LC_REQUIRE_MEDIA_GATE=1` 会把它变成硬性要求。
++  独立验证（2026-09-28）确认：在线库 `t`，逻辑恢复库 `f`。为了不让这个问题藏在 S29 PASS 里，smoke 新增 **S29m**：
++  - 在线 `t`、恢复 `f` → BLOCKED（REQUIRES_INTEGRATOR I8），`smoke.sh full` 整体结果为 BLOCKED；
++  - 两边都是 `t` → PASS，表示 I8 已修复，此时应把 `LC_REQUIRE_MEDIA_GATE` 默认改为 1。
++  S31（PITR）的说明里会记录 `media_plan=` 的值，作为物理恢复不受影响的证据。
+ 
+ ## 5. 生产恢复流程（架构.md §22.3 顺序；需要 owner 批准）
+ 
+diff --git a/docs/runbooks/deploy.md b/docs/runbooks/deploy.md
+index f5cd477..4dcde7c 100644
+--- a/docs/runbooks/deploy.md
++++ b/docs/runbooks/deploy.md
+@@ -73,8 +73,12 @@ deploy/scripts/deploy.sh first           # preflight → 镜像检查 → postgr
+ - OIDC 回调地址：`https://<LC_ADMIN_HOST>/api/auth/callback`（`cmd/api/identity.go:59`），需要在 IdP 注册。
+ - 部署后检查（脚本会自动执行）：
+   - 所有常驻服务 running/healthy。
+-  - worker 就绪标记在 60 s 内出现：`expiry_worker_ready`、`payment_worker_ready`、`meta_worker_ready`。
++  - 所有 `lc-*` 镜像的容器都运行 `:$IMAGE_TAG`。发现旧容器时直接失败。
++  - worker 就绪标记要出现在**该容器本次启动之后**的日志里，也就是 `docker logs --since <.State.StartedAt>`，最多等 60 s。标记包括 `expiry_worker_ready`、`payment_worker_ready`、`meta_worker_ready`。
++    `up -d` 不会重建配置没变的容器，所以重复执行 `first`，或回滚到正在运行的 tag，都是合法的空操作，检查会通过。
+   - `https://<api>/healthz` 返回 200。
++- 构建主机的代理在本机回环地址（`127.0.0.1`/`localhost`/`[::1]`）时，BuildKit 的 RUN 步骤访问不到它。
++  `build-images.sh` 默认（`LC_BUILD_NETWORK=auto`）会自动改用 `--network host` 并给出 WARN。只影响构建，不影响镜像。
+ - `deployments.log`（`/var/lib/live-commerce/`）会追加一行：时间、动作、tag、ledger 行数、操作人。回滚判断依赖这一行。
+ 
+ ## 4. 升级（只能前向）
+@@ -101,6 +105,7 @@ deploy/scripts/deploy.sh upgrade <tag>
+ 
+ 1. **与该 tag 上次部署时相比，ledger 行数没有变化** → `deploy/scripts/deploy.sh app-rollback <旧tag>`。
+    如果 ledger 有变化，脚本会拒绝，并提示 "forward-fix only"。
++   回滚到正在运行的 tag 是空操作，会通过部署后检查。smoke S39 覆盖四条路径：空操作、换 tag（容器重建）、换回原 tag、ledger 变化时拒绝。
+ 2. ledger 已变化，**且**备份之后**没有任何外部业务事实**（恢复流量后没有新订单或支付）→ 由 owner 决定是否按 backup-restore.md 恢复数据库，再做 app-rollback。
+ 3. 其他情况 → **前向修复 + 对账**（架构.md §22.1）。**禁止在真实支付之上恢复数据库**。
+ - 应用回滚不等于数据库回滚。脚本永远不会自动回滚或自动恢复。
+diff --git a/docs/runbooks/incident.md b/docs/runbooks/incident.md
+index b80c19d..985034e 100644
+--- a/docs/runbooks/incident.md
++++ b/docs/runbooks/incident.md
+@@ -67,6 +67,9 @@ dc() { docker compose --project-directory /opt/live-commerce/deploy --env-file /
+ - 配置错误会在模块加载时抛出，日志中能看到。
+ - `__Host-` cookie 只能在 HTTPS 下工作。确认访问经过 Caddy，并且 `COMMERCE_PUBLIC_ORIGIN` 使用 https。
+ - storefront 会校验 Host，所以只能通过 `LC_STORE_HOST` 访问。
++- 打开 `https://<admin>/` 后浏览器被跳到 `https://localhost:3100/...`（连接被拒绝）：检查 admin 容器的 `HOSTNAME`，它必须是 `localhost`，不能是 `127.0.0.1`。
++  原因见 compose.yml admin 的注释和 deploy/README.md 偏差第 10 条。
++  自检命令：`curl -sI --resolve <admin>:443:127.0.0.1 https://<admin>/ | grep -i location`，应该返回 `location: /zh-CN`（相对路径）。
+ 
+ ### workers
+ - 没有出现就绪标记：先查 `*_invalid_config`（例如并发数不是 1–16 的规范十进制数），再查 `*_database*`（DSN、角色、网络）。
+-- 
+2.43.0
+

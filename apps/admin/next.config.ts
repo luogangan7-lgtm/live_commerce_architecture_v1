@@ -23,6 +23,12 @@ const config: NextConfig = {
           },
         ],
       },
+      // ads-ui U2: the Meta return URL carries the one-time `code`/`state`; nothing may receive it as a Referer.
+      // Later entries win for the same key, so this overrides the global same-origin policy for this path only.
+      {
+        source: "/api/ads/meta/callback",
+        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+      },
     ];
   },
 };

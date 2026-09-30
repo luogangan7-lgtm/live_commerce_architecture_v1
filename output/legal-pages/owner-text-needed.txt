@@ -1,0 +1,158 @@
+# Owner text to supply (PENDING) or approve (DRAFT): 156 markers
+# kind	locale	page	what
+PENDING	en	privacy	Policy effective date
+PENDING	en	privacy	Legal entity name (proposed: 香港大碗貿易有限公司; confirm)
+PENDING	en	privacy	Registered business address
+PENDING	en	privacy	Privacy contact email
+DRAFT	en	privacy	Order details: the items, quantities, prices and currency of your order, and its payment and delivery status.
+DRAFT	en	privacy	Delivery details you enter at checkout: recipient name, phone number, and a delivery address or convenience-store pickup point.
+DRAFT	en	privacy	If you comment on one of our live-stream posts on Facebook or Instagram, Meta gives us your comment and an app-scoped identifier so we can send you your cart link by private message. We do not receive your Meta password.
+DRAFT	en	privacy	Card details are entered on Stripe's payment page. We never receive or store your full card number; we keep Stripe's payment reference and status.
+DRAFT	en	privacy	A shopping-session identifier is kept in your browser so you can return to your cart and orders. It is strictly necessary; we set no advertising cookies today.
+DRAFT	en	privacy	To take payment, fulfil and ship your order, show you its status, handle refunds and support requests, and detect fraud or abuse.
+PENDING	en	privacy	Any marketing use of contact details, and the consent wording for it
+PENDING	en	privacy	Retention period for order, payment and delivery records
+DRAFT	en	privacy	Stripe (payment processing), the delivery carrier (recipient name, phone and address), and Meta (private messages on its platform).
+PENDING	en	privacy	Any other processors or hosting locations to be named
+DRAFT	en	privacy	You can ask us to delete your profile, contact and delivery details that are not tied to an order, and to withdraw marketing consent. Instructions: /en/data-deletion. Shoppers with an active shopping session can also use the self-service page at /en/privacy.
+DRAFT	en	privacy	Order, payment, refund and shipment records are kept for legal and financial reasons and are not removed by a deletion request.
+PENDING	en	privacy	Governing law and complaint route for privacy matters
+PENDING	en	terms	Terms effective date
+PENDING	en	terms	Legal entity name that sells and operates this store
+PENDING	en	terms	Business description: the goods sold
+DRAFT	en	terms	By placing an order you agree to these terms and to the shipping, refund and privacy pages.
+DRAFT	en	terms	Prices are shown on each product page with their currency. An order is confirmed only after payment is confirmed.
+DRAFT	en	terms	Stock is held for you only for a short time while you pay; if payment does not complete, the hold is released.
+DRAFT	en	terms	Card payments are processed by Stripe.
+DRAFT	en	terms	Delivery, refunds, returns, cancellation and disputes are set out on the Shipping and Refunds pages.
+PENDING	en	terms	Limitation of liability wording
+PENDING	en	terms	Governing law and jurisdiction
+PENDING	en	terms	How changes to these terms are announced
+PENDING	en	refunds	Policy effective date
+PENDING	en	refunds	Refund window (days from delivery or payment)
+DRAFT	en	refunds	Approved refunds are returned to the original payment method through Stripe. The time it takes to appear depends on your card issuer.
+PENDING	en	refunds	Refund processing time we promise
+PENDING	en	refunds	Return conditions (condition of goods, exclusions, proof required)
+PENDING	en	refunds	Who pays return shipping
+PENDING	en	refunds	Cancellation rule (until when an order can be cancelled, and how to ask)
+DRAFT	en	refunds	If something is wrong with your order, contact us first so we can fix it. You may also dispute a card payment with your card issuer; the dispute is then handled through Stripe, whose response window is usually 7 to 21 days.
+PENDING	en	refunds	Support email for refund and dispute requests
+PENDING	en	shipping	Policy effective date
+PENDING	en	shipping	Shipping regions
+DRAFT	en	shipping	Parcels ship from mainland China to Taiwan through cross-border logistics, to a convenience-store pickup point or an address you enter at checkout.
+PENDING	en	shipping	Carriers used
+PENDING	en	shipping	Lead time from payment to dispatch, and transit time
+PENDING	en	shipping	Shipping fees, free-shipping threshold, and who pays import taxes or duties
+DRAFT	en	shipping	When the carrier and tracking number are recorded for your order, you can see them on your order page.
+PENDING	en	contact	Policy effective date
+PENDING	en	contact	Legal entity name (proposed: 香港大碗貿易有限公司; confirm)
+PENDING	en	contact	Business description: the goods sold
+PENDING	en	contact	Registered business address
+PENDING	en	contact	Customer support email
+PENDING	en	contact	Customer support phone
+PENDING	en	contact	Support hours and target response time
+DRAFT	en	contact	To delete your data, see /en/data-deletion.
+PENDING	zh-TW	privacy	政策生效日期
+PENDING	zh-TW	privacy	法律主體名稱（建議：香港大碗貿易有限公司，待確認）
+PENDING	zh-TW	privacy	登記營業地址
+PENDING	zh-TW	privacy	隱私事務聯絡電子郵件
+DRAFT	zh-TW	privacy	訂單資料：訂單的商品、數量、價格與幣別，以及付款與出貨狀態。
+DRAFT	zh-TW	privacy	您在結帳時填寫的收件資料：收件人姓名、電話，以及收件地址或超商取貨門市。
+DRAFT	zh-TW	privacy	若您在我們於 Facebook 或 Instagram 的直播貼文留言，Meta 會將您的留言與應用程式範圍識別碼提供給我們，以便以私訊寄送購物車連結。我們不會取得您的 Meta 密碼。
+DRAFT	zh-TW	privacy	信用卡資料由您在 Stripe 的付款頁面輸入。我們不會收到或儲存完整卡號，只保留 Stripe 的付款編號與狀態。
+DRAFT	zh-TW	privacy	瀏覽器會保存一個購物工作階段識別碼，讓您能回到購物車與訂單。它屬必要功能；目前我們不設定廣告 Cookie。
+DRAFT	zh-TW	privacy	用於收款、處理與寄出訂單、顯示訂單狀態、處理退款與客服需求，以及偵測詐欺或濫用。
+PENDING	zh-TW	privacy	是否將聯絡資料用於行銷，以及取得同意的文字
+PENDING	zh-TW	privacy	訂單、付款與收件資料的保存期間
+DRAFT	zh-TW	privacy	Stripe（付款處理）、物流業者（收件人姓名、電話與地址），以及 Meta（於其平台上的私訊）。
+PENDING	zh-TW	privacy	需列明的其他處理者或主機所在地
+DRAFT	zh-TW	privacy	您可以要求刪除未與訂單綁定的個人檔案、聯絡與收件資料，並撤回行銷同意。說明請見 /zh-TW/data-deletion。已取得購物工作階段的買家也可使用 /zh-TW/privacy 的自助頁面。
+DRAFT	zh-TW	privacy	訂單、付款、退款與出貨紀錄基於法律與財務保存要求而保留，不會因刪除要求而移除。
+PENDING	zh-TW	privacy	隱私事務的準據法與申訴管道
+PENDING	zh-TW	terms	條款生效日期
+PENDING	zh-TW	terms	銷售並營運本商店的法律主體名稱
+PENDING	zh-TW	terms	營業項目說明：所售商品
+DRAFT	zh-TW	terms	下單即表示您同意本條款，以及運送、退款與隱私權頁面的內容。
+DRAFT	zh-TW	terms	各商品頁面標示價格與幣別。付款確認後訂單才成立。
+DRAFT	zh-TW	terms	付款期間我們只會短時間保留庫存；若付款未完成，保留即釋放。
+DRAFT	zh-TW	terms	信用卡付款由 Stripe 處理。
+DRAFT	zh-TW	terms	運送、退款、退貨、取消與爭議請見「運送」與「退款與退貨」頁面。
+PENDING	zh-TW	terms	責任限制條款文字
+PENDING	zh-TW	terms	準據法與管轄法院
+PENDING	zh-TW	terms	條款變更的公告方式
+PENDING	zh-TW	refunds	政策生效日期
+PENDING	zh-TW	refunds	退款期限（自收貨或付款起算天數）
+DRAFT	zh-TW	refunds	核准的退款會透過 Stripe 退回原付款方式。實際入帳時間取決於發卡銀行。
+PENDING	zh-TW	refunds	承諾的退款處理時間
+PENDING	zh-TW	refunds	退貨條件（商品狀態、排除項目、所需證明）
+PENDING	zh-TW	refunds	退貨運費由誰負擔
+PENDING	zh-TW	refunds	取消規則（訂單可取消至何時、如何申請）
+DRAFT	zh-TW	refunds	若訂單有問題，請先聯絡我們處理。您也可以向發卡銀行對該筆信用卡付款提出爭議；爭議將透過 Stripe 處理，其回應期限通常為 7 至 21 天。
+PENDING	zh-TW	refunds	退款與爭議申請的客服電子郵件
+PENDING	zh-TW	shipping	政策生效日期
+PENDING	zh-TW	shipping	配送地區
+DRAFT	zh-TW	shipping	包裹由中國大陸經跨境物流寄往台灣，送至超商取貨門市或您於結帳時填寫的地址。
+PENDING	zh-TW	shipping	使用的物流業者
+PENDING	zh-TW	shipping	付款至出貨的時程與運送時間
+PENDING	zh-TW	shipping	運費、免運門檻，以及進口稅費由誰負擔
+DRAFT	zh-TW	shipping	當訂單記錄了物流業者與追蹤編號後，您可在訂單頁面查看。
+PENDING	zh-TW	contact	政策生效日期
+PENDING	zh-TW	contact	法律主體名稱（建議：香港大碗貿易有限公司，待確認）
+PENDING	zh-TW	contact	營業項目說明：所售商品
+PENDING	zh-TW	contact	登記營業地址
+PENDING	zh-TW	contact	客服電子郵件
+PENDING	zh-TW	contact	客服電話
+PENDING	zh-TW	contact	客服時間與目標回覆時間
+DRAFT	zh-TW	contact	如需刪除您的資料，請見 /zh-TW/data-deletion。
+PENDING	zh-CN	privacy	政策生效日期
+PENDING	zh-CN	privacy	法律主体名称（建议：香港大碗貿易有限公司，待确认）
+PENDING	zh-CN	privacy	注册营业地址
+PENDING	zh-CN	privacy	隐私事务联系邮箱
+DRAFT	zh-CN	privacy	订单信息：订单的商品、数量、价格与币种，以及付款与发货状态。
+DRAFT	zh-CN	privacy	您在结账时填写的收件信息：收件人姓名、电话，以及收件地址或便利店取货门店。
+DRAFT	zh-CN	privacy	如果您在我们于 Facebook 或 Instagram 的直播帖子下留言，Meta 会把您的留言与应用范围标识符提供给我们，以便通过私信发送购物车链接。我们不会获取您的 Meta 密码。
+DRAFT	zh-CN	privacy	银行卡信息由您在 Stripe 的支付页面输入。我们不会接收或存储完整卡号，只保留 Stripe 的支付编号与状态。
+DRAFT	zh-CN	privacy	浏览器会保存一个购物会话标识符，使您可以回到购物车与订单。它属于必要功能；目前我们不设置广告 Cookie。
+DRAFT	zh-CN	privacy	用于收款、处理并寄出订单、显示订单状态、处理退款与客服请求，以及识别欺诈或滥用。
+PENDING	zh-CN	privacy	是否将联系信息用于营销，以及获取同意的文字
+PENDING	zh-CN	privacy	订单、付款与收件信息的保存期限
+DRAFT	zh-CN	privacy	Stripe（支付处理）、物流承运商（收件人姓名、电话与地址），以及 Meta（其平台上的私信）。
+PENDING	zh-CN	privacy	需列明的其他处理方或服务器所在地
+DRAFT	zh-CN	privacy	您可以要求删除未与订单绑定的个人档案、联系与收件信息，并撤回营销同意。说明见 /zh-CN/data-deletion。已获得购物会话的买家也可使用 /zh-CN/privacy 的自助页面。
+DRAFT	zh-CN	privacy	订单、付款、退款与发货记录基于法律与财务保存要求而保留，不会因删除请求而移除。
+PENDING	zh-CN	privacy	隐私事务的适用法律与投诉渠道
+PENDING	zh-CN	terms	条款生效日期
+PENDING	zh-CN	terms	销售并运营本店铺的法律主体名称
+PENDING	zh-CN	terms	经营范围说明：所售商品
+DRAFT	zh-CN	terms	下单即表示您同意本条款，以及运送、退款与隐私页面的内容。
+DRAFT	zh-CN	terms	各商品页面标示价格与币种。付款确认后订单才成立。
+DRAFT	zh-CN	terms	付款期间我们只会短时间保留库存；如果付款未完成，保留将被释放。
+DRAFT	zh-CN	terms	银行卡付款由 Stripe 处理。
+DRAFT	zh-CN	terms	运送、退款、退货、取消与争议见“运送”与“退款与退货”页面。
+PENDING	zh-CN	terms	责任限制条款文字
+PENDING	zh-CN	terms	适用法律与管辖法院
+PENDING	zh-CN	terms	条款变更的公告方式
+PENDING	zh-CN	refunds	政策生效日期
+PENDING	zh-CN	refunds	退款期限（自收货或付款起算天数）
+DRAFT	zh-CN	refunds	获批的退款会通过 Stripe 退回原支付方式。实际到账时间取决于发卡银行。
+PENDING	zh-CN	refunds	承诺的退款处理时间
+PENDING	zh-CN	refunds	退货条件（商品状态、排除项目、所需证明）
+PENDING	zh-CN	refunds	退货运费由谁承担
+PENDING	zh-CN	refunds	取消规则（订单可取消至何时、如何申请）
+DRAFT	zh-CN	refunds	如果订单有问题，请先联系我们处理。您也可以向发卡银行对该笔银行卡付款提出争议；争议将通过 Stripe 处理，其响应期限通常为 7 至 21 天。
+PENDING	zh-CN	refunds	退款与争议申请的客服邮箱
+PENDING	zh-CN	shipping	政策生效日期
+PENDING	zh-CN	shipping	配送地区
+DRAFT	zh-CN	shipping	包裹由中国大陆经跨境物流寄往台湾，送至便利店取货门店或您在结账时填写的地址。
+PENDING	zh-CN	shipping	使用的承运商
+PENDING	zh-CN	shipping	付款至发货的时效与运输时间
+PENDING	zh-CN	shipping	运费、包邮门槛，以及进口税费由谁承担
+DRAFT	zh-CN	shipping	订单记录了承运商与运单号后，您可以在订单页面查看。
+PENDING	zh-CN	contact	政策生效日期
+PENDING	zh-CN	contact	法律主体名称（建议：香港大碗貿易有限公司，待确认）
+PENDING	zh-CN	contact	经营范围说明：所售商品
+PENDING	zh-CN	contact	注册营业地址
+PENDING	zh-CN	contact	客服邮箱
+PENDING	zh-CN	contact	客服电话
+PENDING	zh-CN	contact	客服时间与目标响应时间
+DRAFT	zh-CN	contact	如需删除您的数据，请见 /zh-CN/data-deletion。

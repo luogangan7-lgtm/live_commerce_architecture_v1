@@ -1,0 +1,757 @@
+{
+  "_comment": "Stripe webhook signature vectors for contracts/stripe-psp-v1.md 5.8 (SP05). Generated once with Node crypto, independently of the Go verifier; fake secrets only. expect: ok | malformed (signature valid, payload unusable) | signature (ErrSignature). now and t are unix seconds.",
+  "vectors": [
+    {
+      "name": "valid_single_v1",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "v0_and_unknown_scheme_ignored",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273,v9=zz",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "roll_multi_v1_second_matches",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=cbbf213d6928a2ed34cca8c7b942efcd4dbcc49888ae20a79da6bf9a3b22bc30,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "second_secret_matches",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789",
+        "whsec_vectorSecretB_not_real_9876543210"
+      ],
+      "header": "t=1790000000,v1=92332e4731d152bbd7db7de30c07c3b00f04fafdd45293301667b9887fc1d7b9",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "unknown_secret",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=92332e4731d152bbd7db7de30c07c3b00f04fafdd45293301667b9887fc1d7b9",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "missing_t",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "duplicate_t",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "only_v0",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v0=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "uppercase_hex",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=E019DB2450DD25785140E9028CD93C702725F7E588E9A38E89F3A8E593C14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "short_hex",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c1427",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "long_hex",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c142730",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "bad_v1_among_good",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273,v1=xyz",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "t_zero",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=0,v1=bbe8b125a47ef165c5b1d25b2e9b832f73dcb6f68e60a23befe85c9e7f178d52",
+      "now": 0,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "t_leading_zero",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=01790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "t_over_2_40",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1099511627777,v1=04acb95610386344cfb7b4e0daaf88d7d02ed8f70d6ec665eb971347bf863c56",
+      "now": 1099511627777,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "t_not_decimal",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000.0,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "now_plus_300_ok",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000300,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "now_plus_301_reject",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000301,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "now_minus_300_ok",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1789999700,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "now_minus_301_reject",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1789999699,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "body_byte_flip",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt^1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "trailing_newline_added",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}\n"
+    },
+    {
+      "name": "space_after_comma",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000, v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "element_without_equals",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273,junk",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "empty_key_element",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,=x,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "sixteen_elements_ok",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000,v0=0000000000000000000000000000000000000000000000000000000000000000",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "seventeen_elements_reject",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0,v0=0",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "header_over_2048",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=e019db2450dd25785140e9028cd93c702725f7e588e9a38e89f3a8e593c14273,v0=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "empty_header",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "malformed_truncated_json",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=9eaa061118572a915835b05e445ec960d55d0a3ad5152bb2f6849c80d8dfe18d",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1\""
+    },
+    {
+      "name": "malformed_duplicate_key_root",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=04740800d14ca3e06977398e63ff970e652a7f28cf3392334bc5839be2619291",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1\",\"id\":\"evt_2\",\"object\":\"event\",\"type\":\"checkout.session.completed\",\"livemode\":false,\"created\":1}"
+    },
+    {
+      "name": "malformed_duplicate_key_nested",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=3eaa8756446e08aa3dcc5f81f4345186c9012da55f226fbd0dce4f8412e05866",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\",\"lc_v\":\"2\"}}}}"
+    },
+    {
+      "name": "malformed_trailing_data",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=ba27a0ab341b061267443ddb0ccbd96108ca54d45892d00f036ca0eb7c45f913",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}{}"
+    },
+    {
+      "name": "malformed_invalid_utf8",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=f30bf2708be6e1c1c0b703a16ad4dd409490bd0df44d0ec513a0a58880837fc1",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body_b64": "eyJpZCI6ImV2dF///iIsIm9iamVjdCI6ImV2ZW50In0="
+    },
+    {
+      "name": "malformed_not_event_object",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=cf7b4105a8618171577db3e298a741fc89d0fb74e481c54693dd35a07e3c2193",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"checkout.session\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "malformed_missing_livemode",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=1c991ba9f49518aeb3c085af98375fdbdd2bbc539d7075ea179259bda2fc32f2",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1\",\"object\":\"event\",\"type\":\"checkout.session.completed\",\"created\":1}"
+    },
+    {
+      "name": "malformed_depth_65",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=d96bdf574700e299fb69ba93d8bdc79c426aa0ad98046c2ac610188188bb737b",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1\",\"object\":\"event\",\"type\":\"x\",\"livemode\":false,\"created\":1,\"deep\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+    },
+    {
+      "name": "malformed_created_string",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=fc469b0b4e07f22775aada097197ef09f6c05eca9f53ed82217f2e02b1875ae4",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":\"1790000000\",\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}"
+    },
+    {
+      "name": "malformed_root_array",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=da116abb386a3dde94de0d591064a6138f73e4a732d10352ffdc87741664da4e",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "[]"
+    },
+    {
+      "name": "malformed_empty_body",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=7079dfce796e82a3fd83356ad7a7076b2fd76c8f88e1d31c8a5179d47c48cea8",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": ""
+    },
+    {
+      "name": "connect_event_account_present",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=87a4141f0383d178efda7f82cca9f4117b989ab44271a814eac63617fcb5f49e",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}},\"account\":\"acct_1Other\"}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": false,
+        "account_present": true,
+        "probe": false
+      }
+    },
+    {
+      "name": "probe_session",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=0b9c775d5f5fdb695e76c16af9d2598528094f27c15d21adc96ea13e86ce75b6",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_probe\":\"1\"}}}}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": false,
+        "account_present": false,
+        "probe": true
+      }
+    },
+    {
+      "name": "livemode_true_projected_not_decided",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=45b16c3ffbeaecd5c1854a73913dc1719bbc56f13cb0eae1b57af87230b45889",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCompleted\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":true,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector1\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"lc_order\":\"9f1c2e4d-5a6b-4c7d-8e9f-0a1b2c3d4e5f\",\"lc_profile\":\"SANDBOX\",\"lc_v\":\"1\"}}}}",
+      "event": {
+        "id": "evt_1VectorCompleted",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector1",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "livemode": true,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "refund_updated_projects_payment_intent_and_lc_refund",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=02f7f1044ebe0be137983df616797ee974069ab8b5b7e2b9874ce7fd63f8945d",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorRefundUpd\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"refund.updated\",\"data\":{\"object\":{\"id\":\"re_1VectorRefund\",\"object\":\"refund\",\"amount\":1000,\"currency\":\"twd\",\"status\":\"succeeded\",\"payment_intent\":\"pi_1VectorIntent\",\"metadata\":{\"lc_refund\":\"5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77\",\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}}}}}",
+      "event": {
+        "id": "evt_1VectorRefundUpd",
+        "type": "refund.updated",
+        "object_type": "refund",
+        "session_id": "re_1VectorRefund",
+        "client_reference_id": "",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "payment_intent_id": "pi_1VectorIntent",
+        "metadata_refund": "5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "refund_failed_projects_same_fields",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=c10af330e9a7be78c5986637f965d8050120424c3dd906730e277d1081a10097",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorRefundFail\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"refund.failed\",\"data\":{\"object\":{\"id\":\"re_1VectorRefund\",\"object\":\"refund\",\"amount\":1000,\"currency\":\"twd\",\"status\":\"failed\",\"payment_intent\":\"pi_1VectorIntent\",\"metadata\":{\"lc_refund\":\"5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77\",\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}},\"failure_reason\":\"declined\"}}}",
+      "event": {
+        "id": "evt_1VectorRefundFail",
+        "type": "refund.failed",
+        "object_type": "refund",
+        "session_id": "re_1VectorRefund",
+        "client_reference_id": "",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "payment_intent_id": "pi_1VectorIntent",
+        "metadata_refund": "5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "refund_created_dashboard_has_no_lc_refund",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=62061de070817f6a453323bd85bacdd6e92b7676583dc34e366e4b31dd0a7ea9",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorRefundDash\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"refund.created\",\"data\":{\"object\":{\"id\":\"re_1VectorDash\",\"object\":\"refund\",\"amount\":1000,\"currency\":\"twd\",\"status\":\"succeeded\",\"payment_intent\":\"pi_1VectorIntent\",\"metadata\":{},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}}}}}",
+      "event": {
+        "id": "evt_1VectorRefundDash",
+        "type": "refund.created",
+        "object_type": "refund",
+        "session_id": "re_1VectorDash",
+        "client_reference_id": "",
+        "metadata_attempt": "",
+        "payment_intent_id": "pi_1VectorIntent",
+        "metadata_refund": "",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "refund_null_payment_intent_projects_empty",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=1fa9693f65903d0a6ef7940ee379c5c3cf4230e30b272acb58427863c2ddd865",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorRefundNoPI\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"refund.updated\",\"data\":{\"object\":{\"id\":\"re_1VectorRefund\",\"object\":\"refund\",\"amount\":1000,\"currency\":\"twd\",\"status\":\"succeeded\",\"payment_intent\":null,\"metadata\":{\"lc_refund\":\"5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77\",\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}}}}}",
+      "event": {
+        "id": "evt_1VectorRefundNoPI",
+        "type": "refund.updated",
+        "object_type": "refund",
+        "session_id": "re_1VectorRefund",
+        "client_reference_id": "",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "payment_intent_id": "",
+        "metadata_refund": "5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "charge_refunded_projects_payment_intent",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=ddf91995d83be5775f0fcdce5112c022d8f0b58a7554d58506be31b798047ec1",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorCharge\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"charge.refunded\",\"data\":{\"object\":{\"id\":\"ch_1VectorCharge\",\"object\":\"charge\",\"amount\":2500,\"amount_refunded\":1000,\"payment_intent\":\"pi_1VectorIntent\",\"metadata\":{},\"receipt_url\":\"https://pay.stripe.com/receipts/SENTINEL\",\"billing_details\":{\"email\":\"sentinel@example.invalid\"}}}}",
+      "event": {
+        "id": "evt_1VectorCharge",
+        "type": "charge.refunded",
+        "object_type": "charge",
+        "session_id": "ch_1VectorCharge",
+        "client_reference_id": "",
+        "metadata_attempt": "",
+        "payment_intent_id": "pi_1VectorIntent",
+        "metadata_refund": "",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "refund_livemode_true_projected_not_decided",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=4868a8b1b3add0f0461bbbb920ea2934ca189994820bc204ff02a80ed2fabc15",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorRefundLive\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":true,\"pending_webhooks\":1,\"type\":\"refund.updated\",\"data\":{\"object\":{\"id\":\"re_1VectorRefund\",\"object\":\"refund\",\"amount\":1000,\"currency\":\"twd\",\"status\":\"succeeded\",\"payment_intent\":\"pi_1VectorIntent\",\"metadata\":{\"lc_refund\":\"5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77\",\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}}}}}",
+      "event": {
+        "id": "evt_1VectorRefundLive",
+        "type": "refund.updated",
+        "object_type": "refund",
+        "session_id": "re_1VectorRefund",
+        "client_reference_id": "",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "payment_intent_id": "pi_1VectorIntent",
+        "metadata_refund": "5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77",
+        "livemode": true,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "checkout_session_projection_unchanged",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=d8556697917c5bc6ebc81ab57383e30a75f71838d7d73c69185dfb7efb78ae13",
+      "now": 1790000000,
+      "expect": "ok",
+      "body": "{\"id\":\"evt_1VectorSessUnchanged\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"checkout.session.completed\",\"data\":{\"object\":{\"id\":\"cs_test_vector9\",\"object\":\"checkout.session\",\"client_reference_id\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\",\"metadata\":{\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"}}}}",
+      "event": {
+        "id": "evt_1VectorSessUnchanged",
+        "type": "checkout.session.completed",
+        "object_type": "checkout.session",
+        "session_id": "cs_test_vector9",
+        "client_reference_id": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "metadata_attempt": "0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30",
+        "payment_intent_id": "",
+        "metadata_refund": "",
+        "livemode": false,
+        "account_present": false,
+        "probe": false
+      }
+    },
+    {
+      "name": "refund_bad_signature_body_flip",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=dfc43b8464a94d1ce8edc4baa2aa3b409d1393cdebf13b7af54a38bc6f34963b",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorRefundBad\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"refund.updated\",\"data\":{\"object\":{\"id\":\"re_1VectorRefund\",\"object\":\"refund\",\"amount\":1001,\"currency\":\"twd\",\"status\":\"succeeded\",\"payment_intent\":\"pi_1VectorIntent\",\"metadata\":{\"lc_refund\":\"5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77\",\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}}}}}"
+    },
+    {
+      "name": "refund_signature_over_other_body",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=60feac8a7de665ec3fede0f45c49fd121d98b59bb0699f43c16a20fdb673324c",
+      "now": 1790000000,
+      "expect": "signature",
+      "body": "{\"id\":\"evt_1VectorRefundBad2\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"refund.updated\",\"data\":{\"object\":{\"id\":\"re_1VectorRefunX\",\"object\":\"refund\",\"amount\":1000,\"currency\":\"twd\",\"status\":\"succeeded\",\"payment_intent\":\"pi_1VectorIntent\",\"metadata\":{\"lc_refund\":\"5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77\",\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}}}}}"
+    },
+    {
+      "name": "malformed_refund_lc_refund_not_string",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=dffd6024227de85ce4454d99c9164a903468f6265066814c0bed9645840a7bf7",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1VectorRefundM1\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"refund.updated\",\"data\":{\"object\":{\"id\":\"re_1VectorRefund\",\"object\":\"refund\",\"amount\":1000,\"currency\":\"twd\",\"status\":\"succeeded\",\"payment_intent\":\"pi_1VectorIntent\",\"metadata\":{\"lc_refund\":7,\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}}}}}"
+    },
+    {
+      "name": "malformed_refund_payment_intent_not_string",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=dd9e3b9ba66cdbf1df12763c405de7e9078468d2dc47606ab4daca43160b4283",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1VectorRefundM2\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"refund.updated\",\"data\":{\"object\":{\"id\":\"re_1VectorRefund\",\"object\":\"refund\",\"amount\":1000,\"currency\":\"twd\",\"status\":\"succeeded\",\"payment_intent\":7,\"metadata\":{\"lc_refund\":\"5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77\",\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}}}}}"
+    },
+    {
+      "name": "malformed_refund_duplicate_lc_refund_key",
+      "secrets": [
+        "whsec_vectorSecretA_not_real_0123456789"
+      ],
+      "header": "t=1790000000,v1=d63f6ec98258d0fb73149e21e26a1530f7b3da40009a7f2f835d0a96314efa85",
+      "now": 1790000000,
+      "expect": "malformed",
+      "body": "{\"id\":\"evt_1VectorRefundM3\",\"object\":\"event\",\"api_version\":\"2026-08-26.dahlia\",\"created\":1789999995,\"livemode\":false,\"pending_webhooks\":1,\"type\":\"refund.updated\",\"data\":{\"object\":{\"id\":\"re_1VectorRefund\",\"object\":\"refund\",\"amount\":1000,\"currency\":\"twd\",\"status\":\"succeeded\",\"payment_intent\":\"pi_1VectorIntent\",\"metadata\":{\"lc_refund\":\"5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77\",\"lc_refund\":\"5d0a7f52-3c1e-4b7a-8f0d-6a2b9c4e1d77\",\"lc_attempt\":\"0b5e3c1a-7d2f-4e8a-9c61-2f4d8e7a1b30\"},\"destination_details\":{\"card\":{\"reference\":\"ARN_VECTOR_SENTINEL\"}}}}}"
+    }
+  ]
+}

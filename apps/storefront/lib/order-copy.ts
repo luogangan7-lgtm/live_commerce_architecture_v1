@@ -1,4 +1,5 @@
 import type { Locale } from "@live-commerce/i18n";
+import type { CarrierCode } from "./purchase";
 
 const en = {
   address: "Delivery address",
@@ -46,8 +47,48 @@ const en = {
     "Payment is not open on this page yet. No payment is taken by creating an order.",
   recovery:
     "An order may already exist. Restore access and recover the same request; a new shopping session will not recover it.",
+  // manual-fulfilment-v1 §5.2: the seller's attestation only; never "in transit" or "delivered".
+  shipped: "Shipped by the seller",
+  carrier: "Carrier",
+  tracking: "Tracking number",
+  copyTracking: "Copy tracking number",
+  copied: "Copied",
+  copyFailed: "Copy failed — select the number and copy it manually.",
+  trackLink: "Open the carrier's tracking page",
+  shipNote:
+    "The seller recorded this shipment. Check the carrier for parcel progress.",
 };
 type Copy = { [K in keyof typeof en]: string };
+// Q3 carrier display names (manual-fulfilment-v1 §3.1 codes); a merchant-entered carrier_name overrides.
+export const carrierNames: Record<Locale, Record<CarrierCode, string>> = {
+  en: {
+    seven_eleven_cvs: "7-ELEVEN",
+    familymart_cvs: "FamilyMart",
+    hilife_cvs: "Hi-Life",
+    okmart_cvs: "OK mart",
+    sf_express: "SF Express",
+    chunghwa_post: "Chunghwa Post",
+    other: "Other",
+  },
+  "zh-TW": {
+    seven_eleven_cvs: "7-ELEVEN 交貨便",
+    familymart_cvs: "全家 店到店",
+    hilife_cvs: "萊爾富",
+    okmart_cvs: "OK mart",
+    sf_express: "順豐速運",
+    chunghwa_post: "中華郵政",
+    other: "其他",
+  },
+  "zh-CN": {
+    seven_eleven_cvs: "7-ELEVEN 交货便",
+    familymart_cvs: "全家 店到店",
+    hilife_cvs: "莱尔富",
+    okmart_cvs: "OK mart",
+    sf_express: "顺丰速运",
+    chunghwa_post: "中华邮政",
+    other: "其他",
+  },
+};
 export const orderCopy: Record<Locale, Copy> = {
   en,
   "zh-CN": {
@@ -86,6 +127,14 @@ export const orderCopy: Record<Locale, Copy> = {
     unavailable: "此页面暂未开放支付。创建订单不会扣款。",
     recovery:
       "此前可能已创建订单。请恢复访问后查询同一笔请求；新建购物会话不能恢复原订单。",
+    shipped: "商家已发货",
+    carrier: "物流公司",
+    tracking: "运单号",
+    copyTracking: "复制运单号",
+    copied: "已复制",
+    copyFailed: "复制失败，请选中运单号手动复制。",
+    trackLink: "打开物流公司查询页面",
+    shipNote: "这是商家记录的发货信息，配送进度请以物流公司为准。",
   },
   "zh-TW": {
     address: "收件地址",
@@ -123,5 +172,13 @@ export const orderCopy: Record<Locale, Copy> = {
     unavailable: "此頁面暫未開放付款。建立訂單不會扣款。",
     recovery:
       "先前可能已建立訂單。請恢復存取後查詢同一筆請求；新的購物工作階段無法恢復原訂單。",
+    shipped: "商家已出貨",
+    carrier: "物流業者",
+    tracking: "貨運單號",
+    copyTracking: "複製貨運單號",
+    copied: "已複製",
+    copyFailed: "複製失敗，請選取單號後手動複製。",
+    trackLink: "開啟物流業者查詢頁面",
+    shipNote: "這是商家記錄的出貨資訊，配送進度請以物流業者為準。",
   },
 };

@@ -1,5 +1,7 @@
-// Package accounts records merchant-owned provider credentials. Configuration
-// never implies the provider has approved or verified an account.
+// Package accounts owns the custody of merchant-owned provider credentials: sealed key material,
+// account records and the hosted-payment configuration read. Configuration never implies the provider
+// has approved or verified an account. It never logs or returns a plaintext key, never calls a provider
+// (verification lives in the registrars and workers), and never derives merchant scope from a request.
 package accounts
 
 import (

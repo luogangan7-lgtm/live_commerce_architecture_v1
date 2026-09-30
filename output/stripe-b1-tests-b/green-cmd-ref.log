@@ -1,0 +1,30 @@
+# GREEN: cmd SP15 no-PG halves against the scratch reference implementation (not the merged candidate), tests commit 87cfd8f
+# command: GOTOOLCHAIN=go1.27.1 go test -race -count=1 -run SP15 ./cmd/api ./cmd/payment-worker ./cmd/stripe-admin
+--- PASS: TestStripeSP15Process (0.00s)
+    --- PASS: TestStripeSP15Process/frozen_error_codes (0.00s)
+    --- PASS: TestStripeSP15Process/disabled_webhook_reads_only_its_flag_and_opens_nothing (0.00s)
+    --- PASS: TestStripeSP15Process/enabled_webhook_needs_a_private_listener_before_reading_secrets (0.00s)
+    --- PASS: TestStripeSP15Process/webhook_config_every_negative_and_no_leak (0.00s)
+    --- PASS: TestStripeSP15Process/api_never_reads_stripe_secrets_and_webhook_reads_only_its_own_names (0.00s)
+    --- PASS: TestStripeSP15Process/buyer_payment_stripe_flag_is_nested_and_never_reads_stripe_secrets (0.00s)
+    --- PASS: TestStripeSP15Process/mountStripe_reserves_the_whole_namespace (0.00s)
+PASS
+ok  	livecommerce/cmd/api	1.430s
+--- PASS: TestStripeSP15Process (0.00s)
+    --- PASS: TestStripeSP15Process/frozen_error_code (0.00s)
+    --- PASS: TestStripeSP15Process/disabled_worker_reads_only_its_flag_whatever_stripe_says (0.00s)
+    --- PASS: TestStripeSP15Process/stripe_flag_is_read_only_when_enabled_and_is_strict (0.00s)
+    --- PASS: TestStripeSP15Process/worker_never_reads_global_stripe_or_webhook_secrets (0.00s)
+    --- PASS: TestStripeSP15Process/unreachable_database_reports_only_the_fixed_code (0.00s)
+PASS
+ok  	livecommerce/cmd/payment-worker	1.415s
+--- PASS: TestStripeSP15Process (0.20s)
+    --- PASS: TestStripeSP15Process/no_args_and_unknown_subcommand_read_nothing_and_print_nothing (0.00s)
+    --- PASS: TestStripeSP15Process/each_subcommand_reads_only_its_own_variables_and_leaks_nothing (0.00s)
+    --- PASS: TestStripeSP15Process/register_and_rotate_never_read_signing_material_and_webhook_never_reads_api_keys (0.00s)
+    --- PASS: TestStripeSP15Process/live_is_refused_by_the_cli (0.00s)
+    --- PASS: TestStripeSP15Process/bad_flags_and_ids_fail_without_leaking (0.00s)
+    --- PASS: TestStripeSP15Process/source_guard_stripe_secrets_only_in_the_registrar_and_the_adapter (0.20s)
+PASS
+ok  	livecommerce/cmd/stripe-admin	1.530s
+# exit: 0

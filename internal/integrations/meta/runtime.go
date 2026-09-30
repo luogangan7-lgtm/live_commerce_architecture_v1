@@ -77,6 +77,15 @@ func webhookDispatch(routes map[string]http.Handler) http.Handler {
 // consumer's SQL authority remain separate.
 func NewConsumerClient(ctx context.Context, workerPool, consumerPool *pgxpool.Pool,
 	keys *PayloadKeyring, concurrency int) (*river.Client[pgx.Tx], error) {
+	return NewConsumerClientWithClaims(ctx, workerPool, consumerPool, keys, ClaimsActorKey{}, concurrency)
+}
+
+// NewConsumerClientWithClaims is NewConsumerClient with claim staging (meta-claims-intake-v1
+// §5.1) when actor holds a key; the zero key is exactly NewConsumerClient. It adds no pool, no
+// River job kind and no privilege: the consumer's only new authority is EXECUTE on
+// meta_inbox.stage_claim_intake.
+func NewConsumerClientWithClaims(ctx context.Context, workerPool, consumerPool *pgxpool.Pool,
+	keys *PayloadKeyring, actor ClaimsActorKey, concurrency int) (*river.Client[pgx.Tx], error) {
 	if ctx == nil || workerPool == nil || consumerPool == nil || keys == nil ||
 		concurrency < 1 || concurrency > 16 {
 		return nil, ErrRuntimeConfig
@@ -86,7 +95,7 @@ func NewConsumerClient(ctx context.Context, workerPool, consumerPool *pgxpool.Po
 	if err := platform.ValidateMetaWorkerPool(preflight, workerPool); err != nil {
 		return nil, ErrRuntimeDatabase
 	}
-	worker, err := NewConsumerWorker(preflight, consumerPool, keys)
+	worker, err := NewConsumerWorkerWithClaims(preflight, consumerPool, keys, actor)
 	if err != nil {
 		return nil, ErrRuntimeDatabase
 	}

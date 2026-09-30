@@ -72,8 +72,13 @@ func mrLaunch(t *testing.T, binary, name string, env []string) *mrProcess {
 				t.Errorf("preserve %s log: %v", name, err)
 				return
 			}
-			preserved := filepath.Join("/Volumes/data/output", "meta-runtime-process-"+name+"-"+t04Tag()+".log")
-			if err := os.WriteFile(preserved, log, 0600); err != nil {
+			// Keep failure logs under the gitignored repo output/playwright (the
+			// package runs from tests/foundation); no workstation-only path.
+			dir, _ := filepath.Abs("../../output/playwright")
+			preserved := filepath.Join(dir, "meta-runtime-process-"+name+"-"+t04Tag()+".log")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Errorf("preserve %s log: %v", name, err)
+			} else if err := os.WriteFile(preserved, log, 0600); err != nil {
 				t.Errorf("preserve %s log: %v", name, err)
 			} else {
 				t.Logf("preserved process log: %s", preserved)
@@ -133,6 +138,9 @@ func mrNamedDSN(t *testing.T, dsn, name string) string {
 	return u.String()
 }
 
+// mrPoolCount is a single snapshot for running processes and positive
+// controls. After the owning process exited or the pool closed, assert zero
+// with waitPoolsGone (pg_teardown_test.go): backend exit is asynchronous.
 func mrPoolCount(t *testing.T, f *testFixture, names ...string) int64 {
 	t.Helper()
 	return miCount(t, f.owner, `SELECT count(*) FROM pg_stat_activity WHERE datname='lc_foundation_test' AND application_name=ANY($1::text[])`, names)
@@ -229,9 +237,8 @@ func TestMetaRuntimeBinaryPreflightFailureClosesPools(t *testing.T) {
 	apiEnv := []string{"LISTEN_ADDR=" + addr, "DATABASE_URL=" + mainDSN, "COMMERCE_META_WEBHOOK_ENABLED=1", "COMMERCE_META_INGRESS_DATABASE_URL=" + otherIngress, "COMMERCE_META_APPS_JSON=" + appsJSON, "COMMERCE_META_PAYLOAD_ACTIVE_KEY_ID=" + miKeyID, "COMMERCE_META_PAYLOAD_KEYS_JSON=" + keyJSON}
 	api := mrLaunch(t, apiBinary, "api-clone-reject", apiEnv)
 	mrFailsBeforeReady(t, api, "api stopped", mainDSN, otherIngress, keyJSON, appsJSON, miSecret)
-	if mrPoolCount(t, f, mainName) != 0 || mrPoolCount(t, clone, ingressName) != 0 {
-		t.Fatal("split-DB API assembly leaked opened pools")
-	}
+	waitPoolsGone(t, f, "split-DB API assembly leaked opened pools", mainName)
+	waitPoolsGone(t, clone, "split-DB API assembly leaked opened pools", ingressName)
 	client := &http.Client{Timeout: time.Second}
 	if resp, err := client.Get("http://" + addr + "/healthz"); err == nil {
 		_ = resp.Body.Close()
@@ -240,8 +247,9 @@ func TestMetaRuntimeBinaryPreflightFailureClosesPools(t *testing.T) {
 	workerEnv := []string{"COMMERCE_META_WORKER_ENABLED=1", "COMMERCE_META_WORKER_DATABASE_URL=" + workerDSN, "COMMERCE_META_CONSUMER_DATABASE_URL=" + otherConsumer, "COMMERCE_META_WORKER_CONCURRENCY=1", "COMMERCE_META_PAYLOAD_ACTIVE_KEY_ID=" + miKeyID, "COMMERCE_META_PAYLOAD_KEYS_JSON=" + keyJSON}
 	worker := mrLaunch(t, workerBinary, "worker-clone-reject", workerEnv)
 	mrFailsBeforeReady(t, worker, "meta_worker_database_unavailable", workerDSN, otherConsumer, keyJSON)
-	if mrPoolCount(t, f, workerName) != 0 || mrPoolCount(t, clone, consumerName) != 0 ||
-		miCount(t, f.owner, `SELECT count(*) FROM river_meta.river_queue WHERE name='meta_inbox'`) != 0 {
+	waitPoolsGone(t, f, "split-DB worker leaked pools or started queue", workerName)
+	waitPoolsGone(t, clone, "split-DB worker leaked pools or started queue", consumerName)
+	if miCount(t, f.owner, `SELECT count(*) FROM river_meta.river_queue WHERE name='meta_inbox'`) != 0 {
 		t.Fatal("split-DB worker leaked pools or started queue")
 	}
 	// A wrong-role second pool exercises cleanup after the first pool opened.
@@ -254,9 +262,7 @@ func TestMetaRuntimeBinaryPreflightFailureClosesPools(t *testing.T) {
 	}
 	partial := mrLaunch(t, workerBinary, "worker-partial-reject", partialEnv)
 	mrFailsBeforeReady(t, partial, "meta_worker_database_unavailable", workerDSN, wrongConsumer, keyJSON)
-	if mrPoolCount(t, f, workerName, consumerName+"_wrong") != 0 {
-		t.Fatal("partial worker assembly left pool connections")
-	}
+	waitPoolsGone(t, f, "partial worker assembly left pool connections", workerName, consumerName+"_wrong")
 	disabled := exec.Command(workerBinary)
 	disabled.Env = []string{"PATH=" + os.Getenv("PATH"), "COMMERCE_META_WORKER_ENABLED=0", "COMMERCE_META_WORKER_DATABASE_URL=invalid", "COMMERCE_META_CONSUMER_DATABASE_URL=invalid", "COMMERCE_META_PAYLOAD_KEYS_JSON=invalid"}
 	if out, err := disabled.CombinedOutput(); err != nil || len(out) != 0 {
@@ -467,9 +473,7 @@ func TestMetaRuntimeRealAPIBinariesPageInstagramRestart(t *testing.T) {
 		}
 	}
 	mrStop(t, worker, syscall.SIGTERM, true)
-	if mrPoolCount(t, f, workerName, consumerName) != 0 {
-		t.Fatal("SIGTERM worker left ordinary or consumer DB pool")
-	}
+	waitPoolsGone(t, f, "SIGTERM worker left ordinary or consumer DB pool", workerName, consumerName)
 	// The API keeps the old encryption key. Restart worker without that key:
 	// the attempt may run, but no terminal/processed fact may be committed.
 	pendingRaw := miMessage(pageAsset, "m."+randomUUID(), "pending-missing-key")
@@ -508,9 +512,7 @@ func TestMetaRuntimeRealAPIBinariesPageInstagramRestart(t *testing.T) {
 		t.Fatal("missing key did not leave retryable encrypted pending source")
 	}
 	mrStop(t, missing, syscall.SIGTERM, true)
-	if mrPoolCount(t, f, workerName, consumerName) != 0 {
-		t.Fatal("missing-key worker leaked DB pools")
-	}
+	waitPoolsGone(t, f, "missing-key worker leaked DB pools", workerName, consumerName)
 	mustExec(t, f.owner, `UPDATE river_meta.river_job SET scheduled_at=clock_timestamp()-interval '1 second' WHERE id=$1 AND state IN ('retryable','available')`, pending.job)
 	restarted := mrLaunch(t, workerBinary, "worker-restarted", workerEnv)
 	mrReadyLog(t, restarted, "meta_worker_ready")
@@ -521,9 +523,7 @@ func TestMetaRuntimeRealAPIBinariesPageInstagramRestart(t *testing.T) {
 	}
 	mrStop(t, restarted, syscall.SIGTERM, true)
 	mrStop(t, api, syscall.SIGTERM, true)
-	if mrPoolCount(t, f, workerName, consumerName, apiMainName, apiIngressName) != 0 {
-		t.Fatal("API/worker signal cleanup left PG connections")
-	}
+	waitPoolsGone(t, f, "API/worker signal cleanup left PG connections", workerName, consumerName, apiMainName, apiIngressName)
 	for _, p := range []*mrProcess{api, worker, missing, restarted} {
 		mrLogNoSecrets(t, p, miSecret, miKeyID+`","key_base64"`, pageAsset, "runtime-page-message", keyJSON, appsJSON, ingressDSN, workerDSN, consumerDSN)
 	}

@@ -11,6 +11,8 @@ import {
 import { copy } from "@/lib/copy";
 import { csrfCookie, sessionBoundary } from "@/lib/settings-client";
 import { signalLogout } from "@/lib/session-events";
+import { customersCopy } from "@/lib/customers-copy";
+import { BillingBanner } from "./BillingBanner";
 import { Icon } from "./Icon";
 
 export function WorkspaceFrame({
@@ -44,7 +46,11 @@ export function WorkspaceFrame({
     ["orders", "orders", c.orders],
     ["live", "live", c.live],
     ["siteChat", "chat", c.siteChat],
+    ["customers", "support", customersCopy[locale].nav.customers],
+    ["finance", "orders", customersCopy[locale].nav.finance],
+    ["billing", "settings", customersCopy[locale].nav.billing],
     ["meta", "meta", c.meta],
+    ["ads", "meta", c.ads],
     ["support", "support", c.support],
     ["settings", "settings", c.settings],
   ];
@@ -59,11 +65,19 @@ export function WorkspaceFrame({
       router.push(
         `/${locale}/settings${search.get("store") ? `?store=${encodeURIComponent(search.get("store")!)}` : ""}`,
       );
+    else if (id === "ads")
+      router.push(
+        `/${locale}/ads${search.get("store") ? `?store=${encodeURIComponent(search.get("store")!)}` : ""}`,
+      );
     else if (id === "live")
       router.push(
         `/${locale}/studio${search.get("store") ? `?store=${encodeURIComponent(search.get("store")!)}` : ""}`,
       );
-    else if (active === "settings" || active === "orders" || active === "live")
+    else if (id === "customers" || id === "finance" || id === "billing")
+      router.push(
+        `/${locale}/${id}${search.get("store") ? `?store=${encodeURIComponent(search.get("store")!)}` : ""}`,
+      );
+    else if (["settings", "orders", "live", "ads", "customers", "finance", "billing"].includes(active))
       router.push(`/${locale}/`);
     else onSection?.(id);
   }
@@ -194,6 +208,7 @@ export function WorkspaceFrame({
           </div>
         </header>
         <main id="main" className="main">
+          <BillingBanner locale={locale} storeId={search.get("store")} />
           {children}
         </main>
       </div>

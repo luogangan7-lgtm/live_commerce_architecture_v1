@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -202,6 +203,10 @@ func TestBrowserMerchantOrdersBFFRealChain(t *testing.T) {
 		"COMMERCE_API_ORIGIN": api.URL,
 	})
 	fixtureNext.Stdout, fixtureNext.Stderr = fixtureLog, fixtureLog
+	// F6: `next dev` forks a next-server child that outlives its parent and holds the port; own a process
+	// group and signal the whole group (this PID's group only, never by port or name).
+	fixtureNext.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	fixtureNext.Cancel = func() error { return syscall.Kill(-fixtureNext.Process.Pid, syscall.SIGKILL) }
 	if err := fixtureNext.Start(); err != nil {
 		t.Fatal("could not start local fixture Next")
 	}
@@ -210,13 +215,14 @@ func TestBrowserMerchantOrdersBFFRealChain(t *testing.T) {
 	var stopFixtureOnce sync.Once
 	stopFixture := func() {
 		stopFixtureOnce.Do(func() {
-			_ = fixtureNext.Process.Signal(os.Interrupt)
+			_ = syscall.Kill(-fixtureNext.Process.Pid, syscall.SIGINT)
 			select {
 			case <-fixtureDone:
 			case <-time.After(5 * time.Second):
-				_ = fixtureNext.Process.Kill()
+				_ = syscall.Kill(-fixtureNext.Process.Pid, syscall.SIGKILL)
 				<-fixtureDone
 			}
+			stopProcessGroup(t, fixtureNext.Process.Pid) // leaked next-server children hold the port
 		})
 	}
 	t.Cleanup(stopFixture)

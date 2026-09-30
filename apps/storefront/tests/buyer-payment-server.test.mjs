@@ -316,3 +316,170 @@ test("BPT04 every handoff failure is nonretryable, including pre-route and trans
     enabled();
   }
 });
+
+// ---- SU02 (author-side): Stripe routes, stripe-buyer-ui-v1 §2.
+const stripeView = { ...view, methods: [{ ...view.methods[0], code: "stripe_checkout" }] };
+const checkoutURL = "https://checkout.stripe.com/c/pay/cs_test_a1B2";
+const redirect = { order_id: orderID, disposition: "REDIRECT", expires_at: expiry, redirect_url: checkoutURL };
+const signal = { order_id: orderID, scheduled: true };
+const stripePrepare = JSON.stringify({ method_code: "stripe_checkout", method_version: 1, locale: "en" });
+
+test("SU02 five routes: exact upstream path, method, key, body, one fetch each", async () => {
+  enabled();
+  const old = globalThis.fetch;
+  try {
+    const auth = await session();
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url: String(url), options });
+      const u = String(url);
+      if (u.endsWith("/prepare")) return Response.json({ ...prepared, currency: "USD", amount_minor: 2500 });
+      if (u.endsWith("/handoff")) return Response.json(redirect);
+      if (u.endsWith("/refresh") || u.endsWith("/cancel")) return Response.json(signal);
+      return Response.json(stripeView);
+    };
+    assert.deepEqual(await (await payment("GET", "", auth)).json(), stripeView);
+    const prep = await payment("POST", "/prepare", auth, { body: stripePrepare, idempotencyKey: key });
+    assert.equal(prep.status, 200);
+    for (const suffix of ["/handoff", "/refresh", "/cancel"]) {
+      const response = await payment("POST", suffix, auth);
+      assert.equal(response.status, 200, suffix);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.equal(response.headers.get("set-cookie"), null);
+    }
+    assert.deepEqual(calls.map(({ url }) => url.replace(`${api}/v1/buyer/${path}`, "")), ["", "/prepare", "/handoff", "/refresh", "/cancel"]);
+    assert.deepEqual(calls.map(({ options }) => options.method), ["GET", "POST", "POST", "POST", "POST"]);
+    assert.equal(calls[1].options.headers.get("Idempotency-Key"), key);
+    assert.equal(calls[1].options.body, stripePrepare);
+    for (const index of [0, 2, 3, 4]) {
+      assert.equal(calls[index].options.headers.has("Idempotency-Key"), false);
+      assert.equal(calls[index].options.body, undefined);
+      assert.equal(calls[index].options.redirect, "error");
+    }
+  } finally {
+    globalThis.fetch = old;
+    enabled();
+  }
+});
+
+test("SU02 refresh and cancel are keyless and pass every CSRF/context denial before fetch", async () => {
+  enabled();
+  const auth = await session();
+  const old = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = () => { calls++; throw new Error("must not fetch"); };
+  try {
+    for (const suffix of ["refresh", "cancel"]) {
+      const at = `${path}/${suffix}`;
+      for (const [index, candidate] of [
+        request("POST", at, { ...auth, idempotencyKey: key }),
+        request("POST", at, { ...auth, body: "{}" }),
+        request("GET", at, auth),
+        request("POST", `${at}?x=1`, auth),
+        request("POST", `${at}/extra`, auth),
+        request("POST", `orders/${orderID.toUpperCase()}/payment/${suffix}`, auth),
+        request("POST", at, { context: auth.context }),
+        request("POST", at, { cookie: auth.cookie, context: Buffer.alloc(32, 4).toString("base64url") }),
+        request("POST", at, { ...auth, extra: { Origin: "https://evil.example" } }),
+        request("POST", at, { ...auth, extra: { Authorization: "Bearer attacker" } }),
+        request("POST", at, { ...auth, extra: { "X-Tenant-ID": orderID } }),
+      ].entries()) {
+        const rejected = await handleBuyerRequest(candidate);
+        assert.ok(rejected.status >= 400, `${suffix} ${index}`);
+        assert.equal((await rejected.json()).retryable, false, `${suffix} ${index}`);
+      }
+    }
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("SU02 every handoff/refresh/cancel failure is nonretryable and sanitized", async () => {
+  enabled();
+  const auth = await session();
+  const old = globalThis.fetch;
+  try {
+    for (const suffix of ["/handoff", "/refresh", "/cancel"]) {
+      globalThis.fetch = () => { throw new Error("upstream-secret-marker"); };
+      await safeFailure(await payment("POST", suffix, auth), 503);
+      for (const [status, code] of [[429, "rate_limited"], [503, "unavailable"], [404, "not_found"], [409, "conflict"]]) {
+        globalThis.fetch = async () => Response.json({ code, message: "upstream-secret-marker", retryable: true }, { status });
+        await safeFailure(await payment("POST", suffix, auth), status);
+      }
+      globalThis.fetch = async () => new Response("<html>upstream-secret-marker", { status: 502 });
+      await safeFailure(await payment("POST", suffix, auth), 503);
+    }
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("SU02 hostile Stripe bodies become the sanitized 503; PAYUNi and Stripe bodies stay byte-identical", async () => {
+  enabled();
+  const auth = await session();
+  const old = globalThis.fetch;
+  try {
+    const stripePrep = { body: stripePrepare, idempotencyKey: key };
+    const cases = [
+      ["", "GET", {}, { ...stripeView, methods: [stripeView.methods[0], stripeView.methods[0]] }],
+      ["", "GET", {}, { ...view, handoff_state: "CREATING", handoff_expires_at: expiry }],
+      ["", "GET", {}, { ...view, cancel_requested: "no", methods: [] }],
+      ["/prepare", "POST", stripePrep, { ...prepared, currency: "EUR", amount_minor: 2500 }],
+      ["/prepare", "POST", stripePrep, { ...prepared, currency: "USD", amount_minor: 49 }],
+      ["/prepare", "POST", stripePrep, { ...prepared, currency: "TWD", amount_minor: 2550 }],
+      ["/prepare", "POST", { body: '{"method_code":"payuni_credit","method_version":1,"locale":"en"}', idempotencyKey: key }, { ...prepared, currency: "USD" }],
+      ["/handoff", "POST", {}, { ...redirect, redirect_url: "https://checkout.stripe.com.evil.example/x" }],
+      ["/handoff", "POST", {}, { ...redirect, redirect_url: undefined }],
+      ["/handoff", "POST", {}, { ...redirect, disposition: "CREATING" }],
+      ["/handoff", "POST", {}, { ...redirect, form: handoff.form }],
+      ["/refresh", "POST", {}, { order_id: orderID }],
+      ["/refresh", "POST", {}, { ...signal, scheduled: "yes" }],
+      ["/cancel", "POST", {}, { ...signal, extra: 1 }],
+      ["/cancel", "POST", {}, { ...signal, order_id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" }],
+    ];
+    for (const [suffix, method, input, body] of cases) {
+      globalThis.fetch = async () => Response.json(body);
+      await safeFailure(await payment(method, suffix, auth, input), 503, suffix !== "" && suffix !== "/prepare");
+    }
+    // Valid bodies pass through byte-for-byte for both providers.
+    const same = [
+      ["", "GET", {}, stripeView],
+      ["", "GET", {}, { ...view, cancel_requested: false, methods: [], payment_state: "PENDING", commercial_state: "AWAITING_PAYMENT", handoff_state: "READY", handoff_expires_at: expiry }],
+      ["/prepare", "POST", { body: stripePrepare, idempotencyKey: key }, { ...prepared, currency: "HKD", amount_minor: 400 }],
+      ["/prepare", "POST", { body: '{"method_code":"payuni_credit","method_version":1,"locale":"en"}', idempotencyKey: key }, prepared],
+      ["/handoff", "POST", {}, redirect],
+      ["/handoff", "POST", {}, { order_id: orderID, disposition: "UNAVAILABLE", expires_at: expiry }],
+      ["/handoff", "POST", {}, handoff],
+      ["/cancel", "POST", {}, { ...signal, scheduled: false }],
+    ];
+    for (const [suffix, method, input, body] of same) {
+      const raw = JSON.stringify(body);
+      globalThis.fetch = async () => new Response(raw, { status: 200, headers: { "Content-Type": "application/json" } });
+      const got = await payment(method, suffix, auth, input);
+      assert.equal(got.status, 200, suffix);
+      assert.equal(await got.text(), raw, suffix);
+    }
+  } finally {
+    globalThis.fetch = old;
+  }
+});
+
+test("SU02 prepare accepts only the two known method codes", async () => {
+  enabled();
+  const auth = await session();
+  const old = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = () => { calls++; throw new Error("must not fetch"); };
+  try {
+    for (const code of ["stripe", "stripe_card", "Stripe_Checkout", ""]) {
+      const rejected = await payment("POST", "/prepare", auth, {
+        body: JSON.stringify({ method_code: code, method_version: 1, locale: "en" }), idempotencyKey: key,
+      });
+      assert.ok(rejected.status >= 400, code);
+    }
+    assert.equal(calls, 0);
+  } finally {
+    globalThis.fetch = old;
+  }
+});

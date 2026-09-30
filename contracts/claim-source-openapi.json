@@ -1,0 +1,560 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Live Commerce claim-source admin API",
+    "version": "0.2.0",
+    "description": "Meta claims intake, merchant comment source (docs/delivery/units/claim-source.md, contracts/meta-claims-intake-v1.md section 2). Tenant and store come from the merchant session, never the request. DESIGN plus MOCK/REAL_PG gates; no LIVE Meta call exists in R1."
+  },
+  "paths": {
+    "/v1/admin/stores/{store_id}/live-sessions/{session_id}/claim-source": {
+      "get": {
+        "operationId": "getClaimSource",
+        "description": "Requires live:read. The session's current comment source (active first, else most recently changed), or source null. platforms lists the store's enabled Meta binding providers.",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Envelope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "source",
+                    "platforms"
+                  ],
+                  "properties": {
+                    "source": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/ClaimSource"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "platforms": {
+                      "type": "array",
+                      "uniqueItems": true,
+                      "maxItems": 2,
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "facebook",
+                          "instagram"
+                        ]
+                      },
+                      "description": "Providers with at least one enabled Meta binding in the store, sorted (ruling p: the UI shows its platform select only when both are present)."
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "403": {
+            "description": "Visible store but operation not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid path id, query or header",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid merchant session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "404": {
+            "description": "Session not visible in current scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable (retryable) or unconfirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "putClaimSource",
+        "description": "Requires live:manage and integration:execute. Binds, re-binds (the current source is deactivated first, one active source per session), edits or deactivates the session's Meta comment source. The Page/Instagram asset is the store's single enabled Meta binding for the pasted (or hinted) platform. Errors: input_invalid, input_unresolvable, invalid_request (422); binding_missing, binding_ambiguous, page_token_missing, source_conflict, version_changed, conflict (409). Canonical path only (ruling o: no /live/sessions/ alias).",
+        "security": [
+          {
+            "merchantBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "store_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.:-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "input",
+                  "private_reply",
+                  "reply_locale",
+                  "active",
+                  "expected_version"
+                ],
+                "properties": {
+                  "input": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": "Numeric id, facebook.com/<page>/posts|videos/<id>, or an Instagram media id. fb.watch links, pfbid links and Instagram shortcodes are rejected (input_unresolvable): R1 has no Graph read path."
+                  },
+                  "private_reply": {
+                    "type": "boolean"
+                  },
+                  "reply_locale": {
+                    "type": "string",
+                    "enum": [
+                      "zh-TW",
+                      "zh-CN",
+                      "en"
+                    ]
+                  },
+                  "active": {
+                    "type": "boolean"
+                  },
+                  "expected_version": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Version of the source GET returned; 0 when none"
+                  },
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "facebook",
+                      "instagram"
+                    ],
+                    "description": "Optional (ruling p). Required when the store has both an enabled Facebook and an enabled Instagram binding and input is a bare numeric id (otherwise binding_ambiguous); when given it must agree with the parsed input (else input_invalid). Re-saving sends the saved source's platform."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The saved source object (not wrapped), after COMMIT; exact replay for the same Idempotency-Key and body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimSource"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "403": {
+            "description": "Visible store but operation not permitted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "409": {
+            "description": "binding_missing | binding_ambiguous | page_token_missing (private_reply=true without a registered Page token, ruling s) | source_conflict | version_changed | conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "415": {
+            "description": "JSON content type required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "422": {
+            "description": "input_invalid | input_unresolvable | invalid_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid merchant session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "404": {
+            "description": "Session not visible in current scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          },
+          "503": {
+            "description": "Temporarily unavailable (retryable) or unconfirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Server-generated request correlation ID"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "merchantBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Opaque short-lived merchant session; server stores hash only."
+      }
+    },
+    "schemas": {
+      "ClaimSource": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "platform",
+          "object",
+          "asset_id",
+          "source_object_id",
+          "private_reply",
+          "reply_locale",
+          "active",
+          "version",
+          "verified",
+          "intake_count",
+          "intake_capped",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "facebook",
+              "instagram"
+            ]
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "page",
+              "instagram"
+            ]
+          },
+          "asset_id": {
+            "type": "string",
+            "pattern": "^[0-9]{1,40}$"
+          },
+          "source_object_id": {
+            "type": "string",
+            "pattern": "^[0-9_]{1,80}$",
+            "description": "Facebook: the feed post_id as delivered (<page>_<post>); Instagram: media.id"
+          },
+          "private_reply": {
+            "type": "boolean"
+          },
+          "reply_locale": {
+            "type": "string",
+            "enum": [
+              "zh-TW",
+              "zh-CN",
+              "en"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "verified": {
+            "type": "boolean",
+            "description": "false for facebook until probe U1 records the delivered live-video post_id form"
+          },
+          "intake_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "intake_capped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "message",
+          "request_id",
+          "retryable",
+          "details"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "message": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

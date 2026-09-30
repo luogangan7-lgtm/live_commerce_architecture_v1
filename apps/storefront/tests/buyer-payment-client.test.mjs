@@ -98,3 +98,45 @@ test("BPT05 unresolved cookie journal blocks handoff; lost response is one fetch
     globalThis.fetch = old;
   }
 });
+
+// ---- SU02 client half (author-side): refresh/cancel share the keyless exception.
+for (const kind of ["refresh", "cancel"]) {
+  test(`SU02 ${kind} permits absent body/key, one fetch, no persistence`, async () => {
+    const data = browser();
+    const old = globalThis.fetch;
+    const calls = [];
+    globalThis.fetch = async (url, options) => {
+      calls.push({ url, options });
+      return Response.json({ order_id: orderID, scheduled: true });
+    };
+    try {
+      const result = await buyerRequest("POST", `orders/${orderID}/payment/${kind}`, context);
+      assert.equal(result.status, 200);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, `/api/buyer/orders/${orderID}/payment/${kind}`);
+      assert.equal(calls[0].options.body, undefined);
+      assert.equal(calls[0].options.headers.get("Idempotency-Key"), null);
+      assert.equal(calls[0].options.redirect, "error");
+      assert.equal(data.size, 0);
+    } finally {
+      globalThis.fetch = old;
+    }
+  });
+
+  test(`SU02 ${kind} rejects a body, a key or a malformed path before any fetch`, async () => {
+    browser();
+    const old = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = () => { calls++; throw new Error("must not fetch"); };
+    try {
+      const at = `orders/${orderID}/payment/${kind}`;
+      for (const [path, body, key] of [
+        [at, {}, undefined], [at, undefined, "valid-key-1"], [`${at}?x=1`, undefined, undefined],
+        [`${at}/`, undefined, undefined], [`orders/${orderID.toUpperCase()}/payment/${kind}`, undefined, undefined],
+      ]) await rejectsLocal(buyerRequest("POST", path, context, body, key));
+      assert.equal(calls, 0);
+    } finally {
+      globalThis.fetch = old;
+    }
+  });
+}

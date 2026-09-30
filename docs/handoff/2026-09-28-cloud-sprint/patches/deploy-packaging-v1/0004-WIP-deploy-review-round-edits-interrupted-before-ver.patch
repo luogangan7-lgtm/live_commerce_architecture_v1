@@ -1,0 +1,1504 @@
+From 3956ddcecf0ee71b52878065c96fdaaea6f772a6 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 13:26:34 +0000
+Subject: [PATCH 4/4] WIP(deploy): review-round edits (interrupted before
+ verify-2 finished)
+
+Interrupted by budget pause 2026-09-28 while the second independent
+compose/docker verification was still running. These edits are unverified.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01JteRiLhGBXZ4UzNCqjoeFy
+---
+ deploy/README.md                        |  36 ++++-
+ deploy/caddy/Caddyfile                  |  46 +++++-
+ deploy/env/compose.env.example          |   4 +-
+ deploy/postgres/ops/lib.sh              |  27 +++-
+ deploy/postgres/ops/pitr-install.sh     |  70 +++++++++
+ deploy/postgres/ops/restore-pitr.sh     |  98 ++++++++++---
+ deploy/postgres/ops/rotate-superuser.sh |  56 +++++++
+ deploy/postgres/postgresql.conf         |   4 +
+ deploy/scripts/build-images.sh          |   5 +-
+ deploy/scripts/deploy.sh                |  56 +++++--
+ deploy/scripts/lib.sh                   |  50 ++++++-
+ deploy/scripts/pg-ops.sh                | 161 ++++++++++++++++++--
+ deploy/scripts/smoke.sh                 | 186 ++++++++++++++++++++++--
+ deploy/scripts/watchdog.sh              |  25 +++-
+ deploy/secrets.manifest.tsv             |   2 +-
+ docs/runbooks/backup-restore.md         |  58 ++++++--
+ docs/runbooks/deploy.md                 |  41 ++++--
+ docs/runbooks/incident.md               |  13 +-
+ 18 files changed, 838 insertions(+), 100 deletions(-)
+ create mode 100755 deploy/postgres/ops/pitr-install.sh
+ create mode 100755 deploy/postgres/ops/rotate-superuser.sh
+
+diff --git a/deploy/README.md b/deploy/README.md
+index 60d35f8..407d831 100644
+--- a/deploy/README.md
++++ b/deploy/README.md
+@@ -27,15 +27,19 @@ Runbooks (Chinese): [deploy](../docs/runbooks/deploy.md) ·
+ ```sh
+ deploy/scripts/host-setup.sh                      # group 10500, dirs/modes, templates -> /etc/live-commerce
+ vi /etc/live-commerce/compose.env /etc/live-commerce/env/*.env   # hosts, flags, OIDC client id
+-deploy/scripts/build-images.sh                    # prints IMAGE_TAG (git sha12); put it in compose.env
++deploy/scripts/build-images.sh                    # prints IMAGE_TAG (git sha12)
+ deploy/scripts/secrets-init.sh                    # creates missing secrets only, never prints values
+ # owner secrets: replace __UNSET__ in secrets/commerce_oidc_client_secret (and meta apps if used)
+ deploy/scripts/preflight.sh --online              # P01-P16, names only
+-deploy/scripts/deploy.sh first                    # postgres -> migrate -> provision -> up -> checks
++deploy/scripts/deploy.sh first <sha12>            # postgres -> migrate -> provision -> tag into compose.env -> up -> checks
+ cp deploy/host/crontab.example /etc/cron.d/live-commerce   # backups + watchdog (edit paths)
+ ```
+ Upgrade: `deploy.sh upgrade <tag>`. It takes a backup, opens a 503 window, runs migrate and provision, then starts the stack.
+ Rollback: `deploy.sh app-rollback <tag>` works only when the migration ledger is unchanged. Otherwise the answer is forward-fix.
++All three write the tag they bring up into `compose.env` (`IMAGE_TAG`) right before `up -d`, so plain `docker compose`
++commands (runbook `dc`) always resolve the running tag; never edit that line by hand (watchdog W10 reports drift).
++Superuser password rotation: `pg-ops.sh rotate-superuser` only. PITR restore to live: `pg-ops.sh restore-pitr --promote`
++then `pg-ops.sh pitr-cutover` (backup-restore.md §6).
+ 
+ ## Topology
+ 
+@@ -58,19 +62,19 @@ The media worker is **not deployed**, because it is MOCK-only (`worker_env.go:17
+ | `compose.yml` / `compose.two-host-db.yml` | Whole stack; 2-host override (NOT_RUN) |
+ | `docker/{go,admin,storefront,caddy}.Dockerfile` | `lc-go` (all Go binaries + migrate + lcentry), `lc-admin`, `lc-storefront`, `lc-caddy` |
+ | `tools/lcentry/` | Stdlib-only launcher: `*_FILE` secret files → env, then `execve`; loopback HTTP probe |
+-| `caddy/Caddyfile` | Edge routing/TLS: admin, shop, api (default-deny, `/healthz` only), hooks (`/v1/meta/webhooks/*`) |
++| `caddy/Caddyfile` | Edge routing/TLS: admin, shop, api (default-deny, `/healthz` only), hooks (`/v1/meta/webhooks/*`); access log with credential query parameters redacted |
+ | `postgres/postgresql.conf`, `pg_hba.conf` | Server settings + WAL archiving; superuser socket-only, services via scram |
+ | `postgres/logins.tsv` | Service LOGIN → one authority → grant shape → consumer (single source) |
+ | `postgres/provision-logins.sh` | Idempotent logins + verification matrix + TCP auth + readiness gates |
+-| `postgres/ops/*` | backup, basebackup, restore-dump, restore-pitr, verify.sql (run inside `pg-ops`) |
++| `postgres/ops/*` | backup, basebackup, restore-dump, restore-pitr (`--drill`/`--promote`), pitr-install (cut-over), rotate-superuser, verify.sql (run inside `pg-ops`) |
+ | `secrets.manifest.tsv` | Every secret file: kind, generator, consumers, rotation |
+ | `env/*.env.example` | `compose.env` (cross-service values) + per-service knob templates |
+ | `scripts/lib.sh` | Shared helpers (`lc_compose`, `lc_psql`, `lc_secret_scan`, env loader) |
+ | `scripts/host-setup.sh`, `secrets-init.sh`, `preflight.sh` | Host prep, secret generation, config validation |
+ | `scripts/build-images.sh`, `check-pins.sh` | Image build (sha12 tags, OCI labels); digest-pin guard |
+-| `scripts/deploy.sh`, `pg-ops.sh` | first / upgrade / app-rollback; DB operations wrapper |
+-| `scripts/watchdog.sh`, `collect-diagnostics.sh` | Cron health checks W1–W9; incident bundle (secret-scanned) |
+-| `scripts/smoke.sh`, `smoke-browser.mjs` | Acceptance `static` (S01–S06) / `full` (S07–S39) with evidence |
++| `scripts/deploy.sh`, `pg-ops.sh` | first / upgrade / app-rollback (keeps compose.env `IMAGE_TAG` = deployed tag); DB operations wrapper incl. `rotate-superuser`, `pitr-cutover` |
++| `scripts/watchdog.sh`, `collect-diagnostics.sh` | Cron health checks W1–W10; incident bundle (secret-scanned) |
++| `scripts/smoke.sh`, `smoke-browser.mjs` | Acceptance `static` (S01–S06) / `full` (S07–S43) with evidence |
+ | `host/crontab.example` | Backup + watchdog schedule |
+ 
+ ## Status matrix (2026-09-28)
+@@ -82,6 +86,7 @@ The media worker is **not deployed**, because it is MOCK-only (`worker_env.go:17
+ | DB layer + edge with **scratch** images: postgres (non-root, read-only, checksums, archiving), migrate ×2 over the socket, provision-logins ×2 (12 logins, matrix, TCP auth, readiness), superuser-over-TCP rejected, api/caddy healthy, worker ready tokens, Caddy internal-CA TLS, default-deny, webhook routing, 308 redirect, unknown Host not proxied, 503 + Retry-After window, hardening of 7 containers, no secret in inspect/logs, backup + restore into a new DB, WAL archiving, basebackup + `pg_verifybackup`, PITR drill (2 s), watchdog W2–W9, diagnostics bundle, graceful stop, clean teardown | **VERIFIED_LOCAL (scratch)** | Scratch `lc-go` built on the host from this tree plus the §7 `cmd/migrate` proposal (outside the worktree, not committed); real `lc-caddy` from `docker/caddy.Dockerfile`. This is not product acceptance |
+ | All 4 image builds + `smoke.sh full` with the I1 proposal: independent test_worker run on 22d5d3f | **FAIL** | 41 PASS / 3 FAIL (S08, S34, S39). S21 was a false PASS. Root causes F1–F3 are in deviations 10–12 |
+ | Same, author re-run after the fixes (f318632, scratch clone + `cmd/migrate` proposal, sandbox-CA base images via `GO_IMAGE`/`NODE_IMAGE`) | **VERIFIED_LOCAL: 45 PASS / 0 FAIL / 1 BLOCKED**, exit 3 | S07 built through `--network host` (loopback proxy); S08 7 names; S21 `307 -> /zh-CN -> 200`; S34 Chromium PASS; S37–S39 PASS (S39 covers all 4 rollback paths); S33 clean; secret scan hits=0. An independent re-run is still owed, because the author cannot be the only acceptor |
++| Review P1 fixes (2026-09-28): S40 Caddy access-log redaction, S41 superuser rotation without log leak, S42 PITR promote + cut-over, S43 compose.env tag persistence + W10 | see `smoke.sh full` evidence of the fix commit | Author run on a scratch clone + I1 proposal; results recorded in the task's deploy-verify-final.md. An independent re-run is still owed |
+ | Logical-restore media gate (S29m) | **BLOCKED (I8)** | Live `media_plan_ready=t`, restored `f`, PITR `t`. It used to be hidden inside the S29 PASS |
+ | Real ACME/DNS, OIDC login, PAYUNi sandbox/live, Meta webhooks, media, 2-host TLS, K8s, load, CVE scan | **NOT_RUN** | Need owner inputs (O2, O3, O11, B3–B6) |
+ 
+@@ -141,6 +146,23 @@ No new Go modules and no new npm packages. `lcentry` uses only the Go standard l
+     (default), the script builds with `--network host` only when a forwarded proxy variable points at
+     loopback. `default` keeps isolation and warns.
+ 14. `go.Dockerfile` checks every `cmd/<name>` before compiling, so I1 fails in seconds instead of after 5 builds.
++15. **Caddy access log redacts credential query parameters** (review P1). Caddy logs the full URI; a Meta
++    `hub.verify_token` (owner secret) or an OIDC `code`/`state` would have landed in the json-file logs and the
++    diagnostics bundle. `format filter` rewrites `hub.verify_token`, `code`, `state`, `token`, `access_token`,
++    `id_token` to `REDACTED` in `request>uri`, the `Referer` header and the `Location` response header (S40).
++16. **Superuser rotation is a script** (review P1). With `log_statement='ddl'`, a bare `ALTER ROLE postgres
++    PASSWORD` is logged in cleartext (reproduced on the pinned image). `pg-ops.sh rotate-superuser` disables
++    statement logging for its session, writes the file in place (same inode, so the running postgres
++    container's bind-mounted secret follows; a rename would leave `lc_psql` on the old value) and scans the log (S41).
++17. **PITR cut-over = `restore-pitr --promote` + `pitr-cutover`** (review P1). The old manual §6 copied a
++    cluster stopped while paused (`shut down in recovery`); the live server then replayed past the target on
++    timeline 1 and archiving failed forever. `--promote` ends recovery at the target (new timeline; scratch
++    runs `archive_mode=on` with an empty command so the history file is queued, not archived from pg-ops);
++    `pitr-cutover` installs it with checks (timeline > 1, archiver failed unchanged, history archived) (S42).
++    The scratch socket now uses peer auth, so PITR works with base backups older than a password rotation.
++18. **compose.env `IMAGE_TAG` follows deploy.sh** (review P1). The tag used to live only in deploy.sh's
++    environment, so any later plain `docker compose up/run` recreated services on the previous release.
++    deploy.sh now rewrites the line atomically just before `up -d`; watchdog W10 flags drift (S43).
+ 
+ ## Blockers and hand-offs
+ 
+diff --git a/deploy/caddy/Caddyfile b/deploy/caddy/Caddyfile
+index c488521..8524128 100644
+--- a/deploy/caddy/Caddyfile
++++ b/deploy/caddy/Caddyfile
+@@ -42,11 +42,53 @@
+ 		Strict-Transport-Security "max-age=31536000"
+ 		-Server
+ 	}
+-	# Access log: JSON to stdout -> json-file driver. Caddy redacts Cookie/Authorization by default.
++	# Access log: JSON to stdout -> json-file driver (kept ~100 MB per container, bundled by
++	# collect-diagnostics.sh). Caddy redacts Cookie/Set-Cookie/Authorization by default, but it logs
++	# the full request URI including the query string, so credential-bearing query parameters are
++	# rewritten to REDACTED before the line is written (review P1; AGENTS.md: no secrets in logs):
++	#   hub.verify_token  Meta webhook verification (production value from the owner secret
++	#                     commerce_meta_apps_json; read from the query by
++	#                     internal/integrations/meta/handler.go challenge()).
++	#   code, state       OIDC authorization response on admin /api/auth/callback
++	#                     (apps/admin/app/api/auth/callback/route.ts); `state` also appears in the
++	#                     Location of /api/auth/login's redirect to the IdP.
++	#   token, access_token, id_token  defensive: bearer-style parameters must never be logged.
++	# The same rules apply to the Referer request header and the Location response header, which
++	# can carry those URLs as well. Other parameters stay visible (e.g. hub.challenge) for triage.
++	# Verified by smoke S40 (canary values through the hooks and admin hosts; none may reach any
++	# container log). Add a parameter here whenever a route starts taking a secret in its query.
+ 	# Contains client IPs: retention is owner decision O8.
+ 	log {
+ 		output stdout
+-		format json
++		format filter {
++			wrap json
++			fields {
++				request>uri query {
++					replace hub.verify_token REDACTED
++					replace code REDACTED
++					replace state REDACTED
++					replace token REDACTED
++					replace access_token REDACTED
++					replace id_token REDACTED
++				}
++				request>headers>Referer query {
++					replace hub.verify_token REDACTED
++					replace code REDACTED
++					replace state REDACTED
++					replace token REDACTED
++					replace access_token REDACTED
++					replace id_token REDACTED
++				}
++				resp_headers>Location query {
++					replace hub.verify_token REDACTED
++					replace code REDACTED
++					replace state REDACTED
++					replace token REDACTED
++					replace access_token REDACTED
++					replace id_token REDACTED
++				}
++			}
++		}
+ 	}
+ 	# Upstream down (deploy.sh maintenance window, crash) -> explicit maintenance 503.
+ 	handle_errors 502 503 504 {
+diff --git a/deploy/env/compose.env.example b/deploy/env/compose.env.example
+index a6ea47b..a7a465d 100644
+--- a/deploy/env/compose.env.example
++++ b/deploy/env/compose.env.example
+@@ -11,7 +11,8 @@
+ #   in production.
+ # Change rules: KEY=VALUE lines, no inline comments, no `export`. The shell environment
+ #   overrides this file (Compose precedence); deploy.sh uses that to pass IMAGE_TAG for
+-#   upgrade/rollback.
++#   upgrade/rollback AND rewrites the IMAGE_TAG line here (atomic rename, owner/mode kept) just
++#   before `up -d`, so every other Compose entry point resolves the deployed tag (review P1).
+ 
+ # --- Compose -------------------------------------------------------------------------------
+ COMPOSE_PROJECT_NAME=live-commerce
+@@ -19,6 +20,7 @@ COMPOSE_PROJECT_NAME=live-commerce
+ # approval), meta (blocked by the meta-runtime gate). pg-ops.sh adds `ops` by itself.
+ COMPOSE_PROFILES=db,app,payments-sandbox
+ # git sha12 of the images built by deploy/scripts/build-images.sh (lc-go/admin/storefront/caddy).
++# Maintained by deploy.sh first|upgrade|app-rollback; do not edit by hand (watchdog W10 = drift).
+ IMAGE_TAG=CHANGE_ME_GIT_SHA12
+ LC_IMAGE_PREFIX=lc
+ # production | staging | smoke (smoke relaxes host-name and owner checks; never on a real host).
+diff --git a/deploy/postgres/ops/lib.sh b/deploy/postgres/ops/lib.sh
+index fb889b8..28263e2 100755
+--- a/deploy/postgres/ops/lib.sh
++++ b/deploy/postgres/ops/lib.sh
+@@ -9,7 +9,8 @@
+ #   /var/lib/postgresql (pitr-scratch volume, NOT pgdata), /ops (these scripts, read-only).
+ # Reads secrets: /run/secrets/pg_superuser_password -> written once to a 0600 pgpass file on
+ #   the /tmp tmpfs so no password sits in the environment or argv of pg_dump/psql.
+-# Used by: backup.sh, basebackup.sh, restore-dump.sh, restore-pitr.sh.
++# Used by: backup.sh, basebackup.sh, restore-dump.sh, restore-pitr.sh, rotate-superuser.sh,
++#   pitr-install.sh.
+ # Depends on: PostgreSQL 18 client tools in the same image as the server (versions match).
+ # Status: DESIGN; exercised by smoke S28-S31.
+ # Change rules: keep output free of row values and secrets; only names, counts, sizes, hashes.
+@@ -50,3 +51,27 @@ ops_psql() { psql -X -q -At -v ON_ERROR_STOP=1 "$@"; }
+ 
+ # ops_sha256 FILE — hex digest only.
+ ops_sha256() { sha256sum "$1" | cut -d' ' -f1; }
++
++# ops_alter_superuser_password FILE [PSQL ARGS...] — ALTER ROLE postgres PASSWORD <contents of FILE>
++#   in ONE psql session that first disables every server-side statement-logging path
++#   (log_statement — the live server runs 'ddl', so an ALTER ROLE would otherwise be logged in
++#   cleartext —, log_min_error_statement, log_min_duration_statement), exactly like
++#   deploy/postgres/provision-logins.sh. psql reads the value itself (\set pw `cat FILE`), so it is
++#   never in argv or the environment; VERBOSITY terse keeps psql from echoing statement text on an
++#   error. Connection = current libpq environment (PGHOST/PGUSER/PGPASSFILE) plus PSQL ARGS.
++#   Used by: rotate-superuser.sh (live server), restore-pitr.sh --promote (scratch cluster).
++ops_alter_superuser_password() {
++  local file=$1
++  shift
++  [[ "$file" =~ ^/[A-Za-z0-9._/-]+$ && -r "$file" ]] || ops_die "password file not readable"
++  {
++    echo "\\set VERBOSITY terse"
++    echo "SET log_statement = 'none';"
++    echo "SET log_min_error_statement = 'panic';"
++    echo "SET log_min_duration_statement = -1;"
++    echo "SET client_min_messages = 'warning';"
++    printf '\\set pw `cat %s`\n' "$file"
++    echo "SELECT format('ALTER ROLE postgres PASSWORD %L', :'pw') \\gexec"
++    echo "\\unset pw"
++  } | ops_psql -d postgres "$@" >/dev/null
++}
+diff --git a/deploy/postgres/ops/pitr-install.sh b/deploy/postgres/ops/pitr-install.sh
+new file mode 100755
+index 0000000..e81c302
+--- /dev/null
++++ b/deploy/postgres/ops/pitr-install.sh
+@@ -0,0 +1,70 @@
++#!/usr/bin/env bash
++# File: deploy/postgres/ops/pitr-install.sh
++# Purpose: the data-directory half of the PITR cut-over (docs/runbooks/backup-restore.md §6):
++#   --check    prove the pitr-scratch volume holds a cluster that `restore-pitr.sh --promote`
++#              finished: PROMOTED marker present, pg_control "shut down" (NOT "shut down in
++#              recovery", which would make the live server crash-recover past the target on the
++#              old timeline — review P1), timeline > 1, no recovery.signal/standby.signal.
++#   --install  (live pgdata volume mounted at /live, postgres STOPPED) move the live data dir
++#              /live/18/docker aside to /live/18/docker.pre-pitr-<UTC> (same filesystem, instant,
++#              the rollback copy) and copy the promoted cluster into /live/18/docker. The PROMOTED
++#              marker is removed so the same scratch cluster can never be installed twice.
++# Usage: never by hand; deploy/scripts/pg-ops.sh pitr-cutover runs
++#   run_ops /ops/pitr-install.sh --check                    (scratch only)
++#   pg-ops run -v pgdata:/live ... /ops/pitr-install.sh --install
++# Runs as/in: pg-ops container (UID 999 = owner of both data dirs, network none). This is the
++#   ONLY place pg-ops ever sees live PGDATA, and only through the explicit extra mount above.
++# Reads env / secrets: none.
++# Used by: deploy/scripts/pg-ops.sh pitr-cutover; smoke.sh S42.
++# Depends on: restore-pitr.sh --promote output in /var/lib/postgresql/pitr (pitr-scratch volume):
++#   pgdata/ and the PROMOTED marker (key=value: base, target_time, timeline, promoted_at).
++# Status: DESIGN; verified by smoke S42 (promote -> cut-over -> timeline 2, rows == target,
++#   archiver failed=0, history file archived, stack back through deploy.sh first).
++# Change rules: never delete the previous data dir here; removing it is an owner decision after
++#   the new base backup (runbook §6).
++export OPS_SCRIPT=pitr-install
++# shellcheck source=deploy/postgres/ops/lib.sh
++source /ops/lib.sh
++
++mode=${1:-}
++[[ "$mode" == --check || "$mode" == --install ]] && (($# == 1)) || ops_die "usage: pitr-install.sh --check | --install" 2
++src="$OPS_SCRATCH/pgdata"
++marker="$OPS_SCRATCH/PROMOTED"
++live_root=/live/18
++live="$live_root/docker"
++
++ctl() { pg_controldata "$1" | sed -n "s/^$2: *//p"; }
++
++# ---- scratch cluster must be a finished promotion ------------------------------------------------
++[[ -f "$marker" && -d "$src" ]] || ops_die "no promoted PITR cluster in pitr-scratch (run: pg-ops.sh restore-pitr --target-time TS --promote)"
++state=$(ctl "$src" "Database cluster state")
++tli=$(ctl "$src" "Latest checkpoint's TimeLineID")
++want_tli=$(sed -n 's/^timeline=//p' "$marker")
++[[ "$state" == "shut down" ]] || ops_die "scratch cluster state is '$state', expected 'shut down' (not promoted or not cleanly stopped)"
++[[ "$tli" =~ ^[0-9]+$ ]] && ((tli > 1)) || ops_die "scratch cluster is still on timeline ${tli:-?}; promotion did not happen"
++[[ "$tli" == "$want_tli" ]] || ops_die "scratch timeline $tli differs from the PROMOTED marker ($want_tli)"
++[[ ! -e "$src/recovery.signal" && ! -e "$src/standby.signal" ]] || ops_die "scratch cluster still has a recovery/standby signal file"
++ops_log "scratch ok state='shut down' timeline=$tli $(tr '\n' ' ' <"$marker")"
++[[ "$mode" == --check ]] && exit 0
++
++# ---- install into the live pgdata volume ---------------------------------------------------------
++[[ -d "$live" ]] || ops_die "live data dir /live/18/docker missing (is the pgdata volume mounted at /live?)"
++[[ ! -e "$live/postmaster.pid" ]] || ops_die "live postmaster.pid present: postgres is running or did not stop cleanly; stop it first"
++live_state=$(ctl "$live" "Database cluster state")
++[[ "$live_state" == "shut down" ]] || ops_die "live cluster state is '$live_state', expected 'shut down' (stop postgres cleanly first)"
++need_kb=$(du -sk "$src" | cut -f1)
++avail_kb=$(df -Pk "$live_root" | awk 'NR == 2 { print $4 }')
++[[ "$need_kb" =~ ^[0-9]+$ && "$avail_kb" =~ ^[0-9]+$ ]] && ((avail_kb > need_kb + need_kb / 10)) ||
++  ops_die "not enough space in the pgdata volume: need ${need_kb} KiB (+10 %), have ${avail_kb:-?} KiB"
++old="$live.pre-pitr-$(ops_utc)"
++mv -- "$live" "$old"
++if ! cp -a -- "$src" "$live"; then
++  rm -rf -- "$live"
++  mv -- "$old" "$live"
++  ops_die "copy failed; the previous live data dir was put back unchanged"
++fi
++chmod 0700 "$live"
++sync
++rm -f -- "$marker"
++ops_log "installed timeline=$tli into 18/docker; previous data dir kept as 18/${old##*/} (remove only after the new base backup and owner sign-off)"
++printf 'pitr_previous_datadir=18/%s\n' "${old##*/}"
+diff --git a/deploy/postgres/ops/restore-pitr.sh b/deploy/postgres/ops/restore-pitr.sh
+index c3cd823..8214eef 100755
+--- a/deploy/postgres/ops/restore-pitr.sh
++++ b/deploy/postgres/ops/restore-pitr.sh
+@@ -3,26 +3,45 @@
+ # Purpose: point-in-time recovery into a PRIVATE scratch cluster inside pg-ops (deploy-design
+ #   §15): untar a base backup into the pitr-scratch volume, replay archived WAL up to
+ #   --target-time with recovery_target_action=pause, run verify.sql against the paused
+-#   cluster, stop it. Never touches live PGDATA (pg-ops does not mount pgdata) and never
+-#   archives into the live WAL archive (archive_mode=off for the scratch server).
+-# Usage: restore-pitr.sh --target-time '<timestamptz>' [--base <UTC dir name>] [--drill]
+-#   --drill wipes the scratch cluster afterwards (quarterly drill / smoke S31). Without it the
+-#   stopped cluster stays in the pitr-scratch volume for the MANUAL promotion procedure
+-#   (docs/runbooks/backup-restore.md §PITR 提升), which is never automatic.
++#   cluster, then (mode dependent) stop it. Never touches live PGDATA (pg-ops does not mount
++#   pgdata) and never archives into the live WAL archive.
++# Usage: restore-pitr.sh --target-time '<timestamptz>' [--base <UTC dir name>] [--drill | --promote]
++#   --drill    wipes the scratch cluster afterwards (quarterly drill / smoke S31).
++#   --promote  (first half of the cut-over, docs/runbooks/backup-restore.md §6; smoke S42) after
++#              verify.sql passes at the pause point: pg_wal_replay_resume() ENDS recovery exactly
++#              at the target and promotes (new timeline + its .history file), CHECKPOINT, set the
++#              superuser password to the CURRENT secret (the cluster otherwise keeps the one it had
++#              at the target), clean stop, write the PROMOTED marker for pitr-install.sh.
++#              Review P1: the old procedure copied a cluster fast-stopped WHILE PAUSED
++#              ("shut down in recovery") and deleted recovery.signal, so the live server
++#              crash-recovered through all remaining pg_wal past the target, stayed on timeline 1
++#              and then failed archiving forever (segment names already in /backup/wal).
++#              The scratch server runs with archive_mode=on + an EMPTY archive_command in this
++#              mode (documented "archiving temporarily disabled": WAL is kept and .ready flags
++#              queue up). Nothing is archived from pg-ops; the live server archives the new
++#              timeline's .history file and segments once pitr-cutover installs the cluster.
++#              With archive_mode=off no .ready flag would exist and the history file would never
++#              reach the archive, which later PITRs need to follow the new timeline.
++#   neither    stopped paused cluster stays for inspection only; pitr-install.sh refuses it.
+ # Runs as/in: pg-ops container (UID 999, no network) via `deploy/scripts/pg-ops.sh restore-pitr`.
+ # Reads env: LC_PITR_TIMEOUT_SECONDS (default 1800).
+-# Reads secrets: pg_superuser_password (pgpass on tmpfs; the restored cluster keeps the
+-#   superuser password it had at backup time).
+-# Used by: quarterly PITR drill + manual PITR promotion (docs/runbooks/backup-restore.md §4, §6),
+-#   smoke.sh S31.
+-# Depends on: basebackup.sh output in /backup/base, archived WAL in /backup/wal, ops/verify.sql.
+-# Status: DESIGN; verified by smoke S31 (records the drill duration = RTO sample).
+-# Change rules: keep listen_addresses='' (socket only) and archive_mode=off for the scratch server.
++# Reads secrets: pg_superuser_password: pgpass on tmpfs (ops_auth, used by nothing here since the
++#   scratch socket uses peer auth) and, with --promote, the value set on the promoted cluster.
++#   The scratch hba is `local all postgres peer` (pg-ops runs as OS user postgres, UID 999; the
++#   socket dir is 0700 inside a network-less container): the restored cluster has the superuser
++#   password of the TARGET time, which differs from the secret file after a rotation.
++# Used by: quarterly PITR drill + PITR cut-over (docs/runbooks/backup-restore.md §4, §6),
++#   smoke.sh S31 (--drill), S42 (--promote).
++# Depends on: basebackup.sh output in /backup/base, archived WAL in /backup/wal, ops/verify.sql,
++#   ops/lib.sh ops_alter_superuser_password (--promote).
++# Status: DESIGN; verified by smoke S31 (records the drill duration = RTO sample) and S42.
++# Change rules: keep listen_addresses='' (socket only); never give the scratch server a real
++#   archive_command (archive_mode=off for --drill/inspection, on + empty command for --promote).
+ export OPS_SCRIPT=restore-pitr
+ # shellcheck source=deploy/postgres/ops/lib.sh
+ source /ops/lib.sh
+ 
+-target_time="" base="" drill=0
++target_time="" base="" drill=0 promote=0
+ while (($#)); do
+   case "$1" in
+   --target-time)
+@@ -34,9 +53,11 @@ while (($#)); do
+     shift 2
+     ;;
+   --drill) drill=1 && shift ;;
+-  *) ops_die "usage: restore-pitr.sh --target-time TS [--base NAME] [--drill]" 2 ;;
++  --promote) promote=1 && shift ;;
++  *) ops_die "usage: restore-pitr.sh --target-time TS [--base NAME] [--drill | --promote]" 2 ;;
+   esac
+ done
++((drill + promote < 2)) || ops_die "--drill and --promote are mutually exclusive" 2
+ [[ -n "$target_time" ]] || ops_die "--target-time is required" 2
+ [[ "$target_time" =~ ^[0-9A-Za-z:.+\ _-]{8,40}$ ]] || ops_die "invalid --target-time" 2
+ timeout=${LC_PITR_TIMEOUT_SECONDS:-1800}
+@@ -62,7 +83,13 @@ trap cleanup EXIT
+ tar -xzf "$OPS_BACKUP/base/$base/base.tar.gz" -C "$data"
+ tar -xzf "$OPS_BACKUP/base/$base/pg_wal.tar.gz" -C "$data/pg_wal"
+ touch "$data/recovery.signal"
+-printf 'local all postgres scram-sha-256\n' >"$OPS_SCRATCH/pg_hba.conf"
++# Peer auth (see header): works whatever superuser password the restored cluster has.
++printf 'local all postgres peer\n' >"$OPS_SCRATCH/pg_hba.conf"
++if ((promote)); then
++  archive_opts="-c archive_mode=on -c archive_command='' -c archive_library=''"
++else
++  archive_opts="-c archive_mode=off"
++fi
+ # Hot standby refuses to replay with any of these below the primary's values ("recovery
+ # aborted because of insufficient parameter settings"), so take them from the backup's
+ # pg_control instead of hardcoding (VERIFIED_LOCAL: max_connections=20 aborted recovery).
+@@ -70,11 +97,11 @@ ctl() { pg_controldata "$data" | sed -n "s/^$1 setting: *//p"; }
+ mc=$(ctl max_connections) mwp=$(ctl max_worker_processes) mws=$(ctl max_wal_senders)
+ mpx=$(ctl max_prepared_xacts) mlx=$(ctl max_locks_per_xact)
+ [[ "$mc$mwp$mws$mpx$mlx" =~ ^[0-9]+$ ]] || ops_die "cannot read primary settings from pg_control"
+-ops_log "base=$base target_time=$target_time scratch=$data start"
++ops_log "base=$base target_time=$target_time scratch=$data drill=$drill promote=$promote start"
+ 
+ pg_ctl -D "$data" -l "$OPS_SCRATCH/pitr.log" -w -t 600 -o "\
+  -c listen_addresses='' -c unix_socket_directories='$sock' -c hba_file='$OPS_SCRATCH/pg_hba.conf' \
+- -c archive_mode=off -c shared_buffers=128MB -c logging_collector=off \
++ $archive_opts -c shared_buffers=128MB -c logging_collector=off \
+  -c max_connections=$mc -c max_worker_processes=$mwp -c max_wal_senders=$mws \
+  -c max_prepared_transactions=$mpx -c max_locks_per_transaction=$mlx \
+  -c restore_command='cp /backup/wal/%f %p' -c recovery_target_time='$target_time' \
+@@ -96,10 +123,43 @@ ops_log "paused at_target=yes last_replayed_xact=$replay"
+ [[ "${LC_REQUIRE_MEDIA_GATE:-0}" =~ ^[01]$ ]] || ops_die "LC_REQUIRE_MEDIA_GATE must be 0 or 1" 2
+ PGHOST=$sock ops_psql -d "$OPS_DB" -v require_media="${LC_REQUIRE_MEDIA_GATE:-0}" -f /ops/verify.sql >&2 ||
+   ops_die "verify.sql failed on the PITR cluster"
++
++if ((promote)); then
++  # End recovery exactly here: with recovery_target_action=pause, resuming at the target ends
++  # recovery and promotes (PostgreSQL docs, recovery_target_action). Poll until writable.
++  PGHOST=$sock ops_psql -d postgres -c "SELECT pg_wal_replay_resume();" >/dev/null
++  in_recovery=t
++  for ((i = 0; i < 120; i++)); do
++    in_recovery=$(PGHOST=$sock ops_psql -d postgres -c "SELECT pg_is_in_recovery();" 2>/dev/null || echo t)
++    [[ "$in_recovery" == f ]] && break
++    sleep 1
++  done
++  [[ "$in_recovery" == f ]] || ops_die "promotion did not finish within 120 s (see $OPS_SCRATCH/pitr.log inside pg-ops)"
++  # The end-of-recovery checkpoint is asynchronous; force one so pg_control names the new timeline.
++  PGHOST=$sock ops_psql -d postgres -c "CHECKPOINT;" >/dev/null
++  tli=$(PGHOST=$sock ops_psql -d postgres -c "SELECT timeline_id FROM pg_control_checkpoint();")
++  [[ "$tli" =~ ^[0-9]+$ ]] && ((tli > 1)) || ops_die "promoted cluster is on timeline ${tli:-?}, expected > 1"
++  # Live services authenticate with the CURRENT secret files; the cluster has the target-time
++  # password. provision-logins (run by pitr-cutover) re-sets the service logins the same way.
++  PGHOST=$sock ops_alter_superuser_password "$OPS_SECRET" || ops_die "could not set the current superuser password on the promoted cluster"
++  pg_ctl -D "$data" -m fast stop >/dev/null
++  state=$(pg_controldata "$data" | sed -n 's/^Database cluster state: *//p')
++  [[ "$state" == "shut down" ]] || ops_die "promoted cluster stopped in state '$state', expected 'shut down'"
++  hist=$(printf '%08X.history' "$tli")
++  [[ -f "$data/pg_wal/$hist" && -f "$data/pg_wal/archive_status/$hist.ready" ]] ||
++    ops_die "timeline history $hist or its .ready flag missing: the live archive would never receive it"
++  [[ ! -e "$data/recovery.signal" ]] || ops_die "recovery.signal still present after promotion"
++  printf 'base=%s\ntarget_time=%s\ntimeline=%s\npromoted_at=%s\n' "$base" "$target_time" "$tli" "$(ops_utc)" >"$OPS_SCRATCH/PROMOTED"
++  duration=$(($(date +%s) - start))
++  ops_log "base=$base duration_s=$duration verify=PASS promoted timeline=$tli state='shut down' result=ok"
++  ops_log "next: LC_CONFIRM_REPLACE_LIVE=I_UNDERSTAND_FORWARD_ONLY deploy/scripts/pg-ops.sh pitr-cutover (owner approval)"
++  printf 'pitr_duration_seconds=%s\npitr_promoted_timeline=%s\n' "$duration" "$tli"
++  exit 0
++fi
+ pg_ctl -D "$data" -m fast stop >/dev/null
+ duration=$(($(date +%s) - start))
+ ops_log "base=$base duration_s=$duration verify=PASS drill=$drill result=ok"
+ if ((!drill)); then
+-  ops_log "stopped PITR cluster kept in the pitr-scratch volume (pgdata/); promotion is manual"
++  ops_log "stopped PAUSED cluster kept for inspection only (state 'shut down in recovery'); it can NOT be cut over. Use --promote for that."
+ fi
+ printf 'pitr_duration_seconds=%s\n' "$duration"
+diff --git a/deploy/postgres/ops/rotate-superuser.sh b/deploy/postgres/ops/rotate-superuser.sh
+new file mode 100755
+index 0000000..202d720
+--- /dev/null
++++ b/deploy/postgres/ops/rotate-superuser.sh
+@@ -0,0 +1,56 @@
++#!/usr/bin/env bash
++# File: deploy/postgres/ops/rotate-superuser.sh
++# Purpose: database half of the pg_superuser_password rotation (docs/runbooks/deploy.md §7):
++#   read the NEW password from stdin, ALTER ROLE postgres with every statement-logging path
++#   switched off for that session (the live server runs log_statement='ddl', which would
++#   otherwise write the new password in cleartext to the postgres log / Docker json-file /
++#   diagnostics bundles — review P1), then prove the new password authenticates and the old one
++#   no longer does. Idempotent: if the new password already works (a rotation interrupted after
++#   the ALTER), it only re-verifies.
++# Usage: never by hand; deploy/scripts/pg-ops.sh rotate-superuser pipes the new value in:
++#   pg-ops.sh rotate-superuser  ->  run_ops /ops/rotate-superuser.sh < <pending secret file>
++# Runs as/in: pg-ops container (postgres image, UID 999, network none, /tmp tmpfs), against the
++#   LIVE server over the shared unix socket (/var/run/postgresql, pg_hba `local all postgres
++#   scram-sha-256`).
++# Reads env: none.
++# Reads secrets: /run/secrets/pg_superuser_password = the CURRENT password (session login, via
++#   the tmpfs pgpass of ops_auth); the NEW password only from stdin -> 0600 file on the /tmp
++#   tmpfs (removed on exit). Neither value is ever printed, put in argv or in the environment.
++# Output: value-free log lines (new_password=active, old_password=rejected, result=ok).
++# Used by: deploy/scripts/pg-ops.sh rotate-superuser; smoke.sh S41.
++# Depends on: ops/lib.sh (ops_auth, ops_psql, ops_alter_superuser_password).
++# Status: DESIGN; verified by smoke S41 (no secret in postgres logs with log_statement='ddl'
++#   live, old password rejected, migrate/provision/pg-ops/lc_psql keep working afterwards).
++# Change rules: the new value must stay hex (the manifest kind hex32): dsn_migrate_owner embeds it
++#   unquoted in a keyword/value DSN. Never add `set -x`.
++export OPS_SCRIPT=rotate-superuser
++# shellcheck source=deploy/postgres/ops/lib.sh
++source /ops/lib.sh
++
++(($# == 0)) || ops_die "usage: rotate-superuser.sh < new-password" 2
++ops_auth
++new_file=$(mktemp /tmp/newpw.XXXXXX)
++new_pgpass=$(mktemp /tmp/pgpass-new.XXXXXX)
++# ops_auth installed a trap for its own pgpass; replace it so every temp file goes on exit.
++trap 'rm -f "$OPS_PGPASS" "$new_file" "$new_pgpass"' EXIT
++
++# At most 200 bytes from stdin, trailing newline stripped; must be the manifest's hex32 format.
++head -c 200 | tr -d '\r\n' >"$new_file"
++[[ "$(<"$new_file")" =~ ^[0-9a-f]{64}$ ]] || ops_die "new password on stdin is not 64 lowercase hex chars (secrets.manifest.tsv kind hex32)"
++cmp -s "$new_file" "$OPS_SECRET" && ops_die "new password equals the current one"
++printf '*:*:*:postgres:%s\n' "$(<"$new_file")" >"$new_pgpass"
++chmod 0600 "$new_pgpass"
++
++# auth_with PGPASSFILE — true when a superuser session opens with that pgpass (socket, scram).
++auth_with() { [[ "$(PGPASSFILE=$1 ops_psql -d postgres -c 'SELECT 1' 2>/dev/null)" == 1 ]]; }
++
++if auth_with "$new_pgpass"; then
++  ops_log "new_password=already_active (resuming an interrupted rotation; no ALTER needed)"
++else
++  auth_with "$OPS_PGPASS" || ops_die "neither the current secret file nor the new value authenticates; stop and escalate (runbook deploy.md §7)"
++  ops_alter_superuser_password "$new_file" || ops_die "ALTER ROLE postgres failed (statement text is not logged); nothing changed"
++fi
++auth_with "$new_pgpass" || ops_die "new password does not authenticate after ALTER ROLE"
++ops_log "new_password=active"
++if auth_with "$OPS_PGPASS"; then ops_die "old password still authenticates"; fi
++ops_log "old_password=rejected result=ok"
+diff --git a/deploy/postgres/postgresql.conf b/deploy/postgres/postgresql.conf
+index d564d04..50dd643 100644
+--- a/deploy/postgres/postgresql.conf
++++ b/deploy/postgres/postgresql.conf
+@@ -47,6 +47,10 @@ archive_command = 'if test -f /backup/wal/%f; then cmp -s %p /backup/wal/%f; els
+ log_destination = 'stderr'
+ logging_collector = off
+ log_line_prefix = '%m [%p] %q%u@%d/%a '     # %a = application_name set in every DSN (service name)
++# 'ddl' logs ALTER ROLE ... PASSWORD in cleartext. Every session that sends a password literal must
++# first SET log_statement='none', log_min_error_statement='panic', log_min_duration_statement=-1
++# (provision-logins.sh; ops/lib.sh ops_alter_superuser_password used by pg-ops.sh rotate-superuser
++# and restore-pitr --promote; verified by smoke S41 with a DDL canary).
+ log_statement = 'ddl'
+ log_min_duration_statement = 500
+ log_parameter_max_length = 0                 # never log bind values (buyer PII)
+diff --git a/deploy/scripts/build-images.sh b/deploy/scripts/build-images.sh
+index 1cfc54d..db8216d 100755
+--- a/deploy/scripts/build-images.sh
++++ b/deploy/scripts/build-images.sh
+@@ -15,7 +15,8 @@
+ #   says so; otherwise the default isolated build network is kept. The network choice affects only
+ #   the build, never the image.
+ # Reads secrets: none — images never contain secrets or env files.
+-# Used by: operators before deploy.sh (IMAGE_TAG in compose.env = printed tag), smoke.sh S07.
++# Used by: operators before deploy.sh (printed tag -> deploy.sh first|upgrade <tag>, which records it
++#   in compose.env), smoke.sh S07.
+ # Depends on: deploy/docker/*.Dockerfile, git (commit id), docker.
+ # Exit: 0 built, 1 build failed, 3 BLOCKED (cmd/migrate missing = REQUIRES_INTEGRATOR I1;
+ #   the Go image would be undeployable without it, so nothing is faked).
+@@ -106,4 +107,4 @@ if [[ -n "$evidence" ]]; then
+   mkdir -p "$evidence"
+   printf '%s\n' "$report" >"$evidence/images.jsonl"
+ fi
+-lc_info "IMAGE_TAG=$tag (set it in compose.env or pass to deploy.sh upgrade)"
++lc_info "IMAGE_TAG=$tag (deploy with: deploy.sh first $tag | deploy.sh upgrade $tag; deploy.sh writes it into compose.env)"
+diff --git a/deploy/scripts/deploy.sh b/deploy/scripts/deploy.sh
+index 8af6d69..c21e7d0 100755
+--- a/deploy/scripts/deploy.sh
++++ b/deploy/scripts/deploy.sh
+@@ -1,26 +1,39 @@
+ #!/usr/bin/env bash
+ # File: deploy/scripts/deploy.sh
+ # Purpose: the three supported release operations (deploy-design §16.1, D11, D12):
+-#   first               preflight -> images present -> postgres healthy -> migrate ->
+-#                       provision-logins -> up -d (active profiles) -> post checks -> log
++#   first [<tag>]       preflight -> images present -> postgres healthy -> migrate ->
++#                       provision-logins -> record tag -> up -d (active profiles) -> post checks
++#                       -> log. <tag> defaults to compose.env IMAGE_TAG.
+ #   upgrade <tag>       preflight(new tag) -> MANDATORY backup -> stop app+workers (Caddy keeps
+-#                       answering 503 + Retry-After) -> migrate(new tag) -> provision -> up -d
+-#                       -> post checks -> log. Never auto-rolls back or restores.
++#                       answering 503 + Retry-After) -> migrate(new tag) -> provision -> record
++#                       tag -> up -d -> post checks -> log. Never auto-rolls back or restores.
+ #   app-rollback <tag>  allowed ONLY if the migration ledger count equals the one recorded when
+ #                       <tag> was last deployed; otherwise refuses ("forward-fix only"). Then
+-#                       up -d (recreates only containers whose image/config changed) -> post
+-#                       checks -> log. Rolling back to the tag that is already running is a
+-#                       valid no-op and must pass (post_checks judges the current lifetime).
+-# Usage: deploy.sh [--smoke] first | upgrade <tag> | app-rollback <tag>
++#                       record tag -> up -d (recreates only containers whose image/config
++#                       changed) -> post checks -> log. Rolling back to the tag that is already
++#                       running is a valid no-op and must pass (post_checks judges the current
++#                       lifetime).
++#   "record tag" (review P1): compose.env IMAGE_TAG is rewritten atomically to the tag being
++#   brought up, immediately BEFORE `up -d`. compose.env is the only tag source for every other
++#   Compose entry point (runbook `dc up`/`dc run migrate`, a re-run of `first`, §8 domain change),
++#   so a tag that lived only in this process's environment let those silently recreate api/admin/
++#   caddy on the previous images (and re-run the previous migrate). Written before `up -d`, not
++#   after post_checks: from that moment containers run the new tag, and a failed post-check must
++#   not leave compose.env pointing at the old images (a later plain `up -d` would then downgrade
++#   over the migrated schema). deployments.log still records only VERIFIED deploys (post_checks
++#   passed) and remains the rollback evidence. watchdog.sh W10 alarms on any drift.
++# Usage: deploy.sh [--smoke] first [<tag>] | upgrade <tag> | app-rollback <tag>
+ #   --smoke: used by smoke.sh S37-S39 — public checks use --resolve to 127.0.0.1 and Caddy's
+ #   local CA instead of real DNS/ACME.
+ # Runs as/in: deploy host (root), through lib.sh lc_compose. NO production deploy may be run
+ #   without owner approval (AGENTS.md); this script only automates the approved procedure.
+ # Reads env: compose.env (IMAGE_TAG, hosts, LC_STATE_DIR, profiles), LC_SMOKE_CACERT (smoke).
+ # Reads secrets: none directly (postgres/migrate/provision read their own mounted files).
+-# Writes: ${LC_STATE_DIR:-/var/lib/live-commerce}/deployments.log
++# Writes: $LC_COMPOSE_ENV IMAGE_TAG line (lib.sh lc_env_file_set: temp file + rename, owner/mode
++#   kept); ${LC_STATE_DIR:-/var/lib/live-commerce}/deployments.log
+ #   (UTC ts <TAB> action <TAB> tag <TAB> ledger_count <TAB> operator).
+-# Used by: operators (docs/runbooks/deploy.md), smoke.sh S37-S39.
++# Used by: operators (docs/runbooks/deploy.md), smoke.sh S37-S39, S42 (stack back after the PITR
++#   cut-over), S43 (compose.env follows the deployed tag).
+ # Depends on: preflight.sh, pg-ops.sh (backup), lib.sh; images from build-images.sh.
+ # Exit: 0 ok; 1 failed (prints the rollback decision tree); 75 migration lock busy (retry
+ #   later by hand, never in a loop); 2 usage.
+@@ -55,6 +68,8 @@ Deploy step failed. Decide (docs/runbooks/deploy.md §回滚决策树):
+     orders after traffic reopened)?  -> owner decides a DB restore (backup-restore.md), then
+     app-rollback. Never restore over real payments.
+  3. Otherwise -> forward fix + reconciliation (架构.md §22.1). Never edit applied SQL/checksums.
++ compose.env IMAGE_TAG is rewritten just before `up -d`; if the failure came after that point it
++ already names the new tag (= what the containers run). app-rollback rewrites it again.
+  Diagnostics: deploy/scripts/collect-diagnostics.sh --since 1h
+ ------------------------------------------------------------------------------------------------
+ EOF
+@@ -178,6 +193,18 @@ log_deploy() {
+   lc_info "recorded $1 tag=$IMAGE_TAG ledger_count=$ledger in deployments.log"
+ }
+ 
++# record_tag — compose.env IMAGE_TAG := $IMAGE_TAG (see header "record tag"). Idempotent.
++record_tag() {
++  local old
++  old=$(lc_env_file_get "$LC_COMPOSE_ENV" IMAGE_TAG || true)
++  if [[ "$old" == "$IMAGE_TAG" ]]; then
++    lc_info "compose.env IMAGE_TAG already $IMAGE_TAG"
++    return 0
++  fi
++  lc_env_file_set "$LC_COMPOSE_ENV" IMAGE_TAG "$IMAGE_TAG"
++  lc_info "compose.env IMAGE_TAG ${old:-<unset>} -> $IMAGE_TAG (plain docker compose commands now resolve this tag)"
++}
++
+ images_present() {
+   local img
+   for img in go admin storefront caddy; do
+@@ -188,11 +215,16 @@ images_present() {
+ 
+ case "$action" in
+ first)
++  if [[ -n "$arg" ]]; then
++    [[ "$arg" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || lc_die "usage: deploy.sh first [<tag>]" 2
++    export IMAGE_TAG=$arg
++  fi
+   if ((smoke)); then "$LC_SCRIPTS_DIR/preflight.sh"; else "$LC_SCRIPTS_DIR/preflight.sh" --online; fi
+   images_present
+   wait_postgres
+   run_migrate
+   run_provision
++  record_tag
+   lc_compose up -d
+   post_checks
+   log_deploy first
+@@ -209,6 +241,7 @@ upgrade)
+   ((${#svcs[@]} == 0)) || lc_compose stop "${svcs[@]}"
+   run_migrate
+   run_provision
++  record_tag
+   lc_compose up -d
+   post_checks
+   lc_info "ledger_count before=$before after=$(lc_ledger_count)"
+@@ -227,12 +260,13 @@ app-rollback)
+   fi
+   export IMAGE_TAG=$arg
+   images_present
++  record_tag
+   lc_compose up -d
+   post_checks
+   log_deploy app-rollback
+   ;;
+ *)
+-  lc_die "usage: deploy.sh [--smoke] first | upgrade <tag> | app-rollback <tag>" 2
++  lc_die "usage: deploy.sh [--smoke] first [<tag>] | upgrade <tag> | app-rollback <tag>" 2
+   ;;
+ esac
+ trap - EXIT
+diff --git a/deploy/scripts/lib.sh b/deploy/scripts/lib.sh
+index ec52b46..da30eea 100755
+--- a/deploy/scripts/lib.sh
++++ b/deploy/scripts/lib.sh
+@@ -1,7 +1,8 @@
+ #!/usr/bin/env bash
+ # File: deploy/scripts/lib.sh
+ # Purpose: shared helpers for every deploy/scripts/*.sh (sourced, never executed):
+-#   logging that names things but never prints values, a safe KEY=VALUE env-file loader,
++#   logging that names things but never prints values, a safe KEY=VALUE env-file loader plus a
++#   file-only getter/atomic setter (deploy.sh keeps compose.env IMAGE_TAG = deployed tag),
+ #   the lc_compose wrapper (fixed project dir + env file), a superuser psql helper that runs
+ #   inside the postgres container over the unix socket, and lc_secret_scan.
+ # Runs as/in: the deploy host (root for real deployments; any user with docker access for
+@@ -64,6 +65,53 @@ lc_load_env() {
+   done <"$file"
+ }
+ 
++# lc_env_file_get FILE KEY — print the value of the first KEY= line of FILE (quotes stripped like
++# lc_load_env); exit 1 when absent. Reads ONLY the file, never the process environment: used to
++# compare what compose.env says with what runs (deploy.sh, watchdog W10, smoke S43).
++lc_env_file_get() {
++  local file=$1 key=$2 line val
++  [[ -r "$file" ]] || return 1
++  while IFS= read -r line || [[ -n "$line" ]]; do
++    line="${line%$'\r'}"
++    [[ "$line" == "$key="* ]] || continue
++    val=${line#*=}
++    if [[ "$val" =~ ^\"(.*)\"$ || "$val" =~ ^\'(.*)\'$ ]]; then val=${BASH_REMATCH[1]}; fi
++    printf '%s\n' "$val"
++    return 0
++  done <"$file"
++  return 1
++}
++
++# lc_env_file_set FILE KEY VALUE — atomically make FILE contain exactly one KEY=VALUE line: the
++# first KEY= line is rewritten in place, later duplicates are dropped, and the line is appended
++# when absent. Temp file in the same directory (same filesystem), owner and mode copied from
++# FILE, fsync, rename; a symlinked FILE is resolved first. VALUE must be a plain token (no
++# newline); never use it for secrets. Used by deploy.sh (IMAGE_TAG), smoke.sh S43.
++lc_env_file_set() {
++  local file key=$2 value=$3 tmp line found=0
++  file=$(readlink -f -- "$1") || lc_die "lc_env_file_set: cannot resolve $1"
++  [[ -f "$file" ]] || lc_die "lc_env_file_set: $file is not a regular file"
++  [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || lc_die "lc_env_file_set: invalid key"
++  [[ "$value" =~ ^[A-Za-z0-9._:/@+-]*$ ]] || lc_die "lc_env_file_set: $key value must be a plain token"
++  tmp=$(mktemp "$(dirname -- "$file")/.${file##*/}.XXXXXX")
++  {
++    while IFS= read -r line || [[ -n "$line" ]]; do
++      if [[ "${line%$'\r'}" == "$key="* ]]; then
++        ((found)) && continue
++        printf '%s=%s\n' "$key" "$value"
++        found=1
++      else
++        printf '%s\n' "$line"
++      fi
++    done <"$file"
++    ((found)) || printf '%s=%s\n' "$key" "$value"
++  } >"$tmp"
++  chown --reference="$file" -- "$tmp" 2>/dev/null || lc_warn "could not copy the owner of ${file##*/} (not root?)"
++  chmod --reference="$file" -- "$tmp"
++  sync -- "$tmp"
++  mv -f -- "$tmp" "$file"
++}
++
+ # lc_require_vars NAME... — fail naming the first unset/empty variable.
+ lc_require_vars() {
+   local name
+diff --git a/deploy/scripts/pg-ops.sh b/deploy/scripts/pg-ops.sh
+index b9133d0..bd725b6 100755
+--- a/deploy/scripts/pg-ops.sh
++++ b/deploy/scripts/pg-ops.sh
+@@ -1,22 +1,32 @@
+ #!/usr/bin/env bash
+ # File: deploy/scripts/pg-ops.sh
+ # Purpose: host wrapper that runs the database operation scripts inside the one-shot pg-ops
+-#   container (profile ops; postgres image = same PG 18 client as the server; no network).
++#   container (profile ops; postgres image = same PG 18 client as the server; no network), plus
++#   the two host-side procedures that need both the host and pg-ops: superuser password rotation
++#   and the PITR cut-over.
+ # Usage: pg-ops.sh backup [--tag TAG]
+ #        pg-ops.sh basebackup
+ #        pg-ops.sh restore-dump <dump dir name | host path under LC_BACKUP_DIR> [restore options]
+-#        pg-ops.sh restore-pitr --target-time TS [--base NAME] [--drill]
++#        pg-ops.sh restore-pitr --target-time TS [--base NAME] [--drill | --promote]
++#        pg-ops.sh pitr-cutover        (needs LC_CONFIRM_REPLACE_LIVE=I_UNDERSTAND_FORWARD_ONLY)
++#        pg-ops.sh rotate-superuser
+ #        pg-ops.sh list
+-# Runs as/in: deploy host (DB host in the 2-host variant), through lib.sh lc_compose.
+-# Reads env: compose.env (LC_BACKUP_DIR), LC_DUMP_RETENTION_DAYS, LC_BASE_KEEP,
+-#   LC_PITR_TIMEOUT_SECONDS, LC_CONFIRM_REPLACE_LIVE, LC_REQUIRE_MEDIA_GATE (forwarded into the
+-#   container only if set).
+-# Reads secrets: none on the host; pg-ops mounts pg_superuser_password.
++# Runs as/in: deploy host as root (DB host in the 2-host variant), through lib.sh lc_compose.
++# Reads env: compose.env (LC_BACKUP_DIR, LC_SECRETS_DIR, LC_SECRETS_GID), LC_DUMP_RETENTION_DAYS,
++#   LC_BASE_KEEP, LC_PITR_TIMEOUT_SECONDS, LC_CONFIRM_REPLACE_LIVE, LC_REQUIRE_MEDIA_GATE
++#   (forwarded into the container only if set).
++# Reads secrets: pg-ops mounts pg_superuser_password. rotate-superuser writes a NEW value to
++#   $LC_SECRETS_DIR/.pg_superuser_password.rotating (0400, durable before the database changes),
++#   feeds it to pg-ops on stdin, installs it IN PLACE into pg_superuser_password and removes the
++#   pending file; values are never printed, logged or put in argv/env.
+ # Used by: cron (deploy/host/crontab.example), deploy.sh upgrade (mandatory backup),
+-#   smoke.sh S28-S31, docs/runbooks/backup-restore.md.
+-# Depends on: deploy/postgres/ops/*.sh, compose service pg-ops, running postgres (except PITR).
+-# Status: DESIGN; verified by smoke S28-S31.
+-# Change rules: keep restore defaults non-destructive (new DB / scratch cluster).
++#   smoke.sh S28-S31, S41 (rotate-superuser), S42 (restore-pitr --promote + pitr-cutover),
++#   docs/runbooks/backup-restore.md, docs/runbooks/deploy.md §7.
++# Depends on: deploy/postgres/ops/*.sh, compose services pg-ops/postgres/provision-logins,
++#   secrets-init.sh (--rederive after rotation), running postgres (except restore-pitr).
++# Status: DESIGN; verified by smoke S28-S31, S41, S42.
++# Change rules: keep restore defaults non-destructive (new DB / scratch cluster); every step that
++#   replaces live data needs LC_CONFIRM_REPLACE_LIVE and owner approval.
+ set -Eeuo pipefail
+ # shellcheck source-path=SCRIPTDIR source=lib.sh
+ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+@@ -32,6 +42,125 @@ for v in LC_DUMP_RETENTION_DAYS LC_BASE_KEEP LC_PITR_TIMEOUT_SECONDS LC_CONFIRM_
+ done
+ # Active profiles + ops (a bare --profile ops would hide the rest of the project from Compose).
+ run_ops() { lc_compose_with_ops run --rm --no-deps -T "${forward[@]}" pg-ops "$@"; }
++# Writers stopped for a cut-over (Caddy and edge-netns keep answering 503 + Retry-After).
++WRITER_SERVICES=(api admin storefront expiry-worker payment-worker-sandbox payment-worker-live meta-worker media-worker)
++
++# wait_postgres_healthy — the container healthcheck (socket ping + listen address) within 180 s.
++wait_postgres_healthy() {
++  local i status
++  for ((i = 0; i < 60; i++)); do
++    status=$(docker inspect -f '{{.State.Health.Status}}' "$(lc_compose ps -q postgres)" 2>/dev/null || echo starting)
++    [[ "$status" == healthy ]] && return 0
++    sleep 3
++  done
++  lc_die "postgres not healthy after 180 s (docker compose logs postgres)"
++}
++
++# archive_switch_ok — force a WAL switch and prove it was archived with no new failure (W4 rule).
++archive_switch_ok() {
++  local a0 a1 f0 f1 i
++  IFS='|' read -r a0 f0 <<<"$(lc_psql <<<"SELECT archived_count, failed_count FROM pg_stat_archiver;")"
++  lc_psql <<<"SELECT pg_logical_emit_message(false, 'lc-pg-ops', 'switch'); SELECT pg_switch_wal();" >/dev/null
++  for ((i = 0; i < 60; i++)); do
++    IFS='|' read -r a1 f1 <<<"$(lc_psql <<<"SELECT archived_count, failed_count FROM pg_stat_archiver;")"
++    ((a1 > a0)) && break
++    sleep 1
++  done
++  lc_info "archiver archived $a0->$a1 failed $f0->$f1"
++  ((a1 > a0 && f1 == f0))
++}
++
++# rotate_superuser — docs/runbooks/deploy.md §7. Order matters (crash-safe, resumable):
++#   1. new value -> .pg_superuser_password.rotating (0400, fsync) BEFORE the DB changes;
++#   2. pg-ops: ALTER ROLE with statement logging off for that session (ops/rotate-superuser.sh);
++#   3. install IN PLACE (`cat >`, same inode): Compose mounts file secrets as single-file bind
++#      mounts, so the RUNNING postgres container (lc_psql, watchdog, deploy.sh read
++#      /run/secrets/pg_superuser_password inside it) sees the new value without a restart. A
++#      rename (new inode) would leave it on the old, now invalid value until postgres restarts;
++#   4. secrets-init.sh --rederive (dsn_migrate_owner embeds the password);
++#   5. prove lc_psql works and scan the postgres log for the new value (lc_secret_scan).
++#   Re-running after an interruption resumes from the pending file (step 2 is idempotent).
++rotate_superuser() {
++  local dir=$LC_SECRETS_DIR cur pending tmp scan
++  lc_require_vars LC_SECRETS_DIR LC_SECRETS_GID
++  lc_service_active postgres || lc_die "postgres is not an active service here (run on the DB host)"
++  command -v openssl >/dev/null || lc_die "openssl is required"
++  cur="$dir/pg_superuser_password" pending="$dir/.pg_superuser_password.rotating"
++  [[ -f "$cur" ]] || lc_die "secret pg_superuser_password missing"
++  umask 077
++  if [[ -f "$pending" ]]; then
++    lc_warn "resuming an interrupted rotation (pending file present); no new value generated"
++  else
++    tmp=$(mktemp "$dir/.pg_superuser_password.XXXXXX")
++    openssl rand -hex 32 | tr -d '\n' >"$tmp"
++    chmod 0400 "$tmp"
++    sync -- "$tmp"
++    mv -f -- "$tmp" "$pending"
++    sync -- "$dir"
++  fi
++  run_ops /ops/rotate-superuser.sh <"$pending" ||
++    lc_die "database step failed; $pending is kept (re-run pg-ops.sh rotate-superuser to resume)"
++  cat -- "$pending" >"$cur"
++  sync -- "$cur"
++  cmp -s -- "$pending" "$cur" || lc_die "installing the new value failed; the valid password is in $pending (copy it over $cur by hand)"
++  rm -f -- "$pending"
++  lc_info "pg_superuser_password installed in place (same inode; mode/owner unchanged)"
++  "$LC_SCRIPTS_DIR/secrets-init.sh" --rederive >/dev/null || lc_die "secrets-init.sh --rederive failed (dsn_migrate_owner still has the old password)"
++  lc_info "derived DSNs rewritten (dsn_migrate_owner)"
++  [[ "$(lc_psql <<<"SELECT 1;")" == 1 ]] ||
++    lc_die "superuser login from the running postgres container fails: its secret mount is stale; run: docker compose restart postgres"
++  scan=$(mktemp)
++  lc_compose logs --no-color postgres >"$scan" 2>&1 || true
++  if ! lc_secret_scan "$scan"; then
++    rm -f "$scan"
++    lc_die "a secret value was found in the postgres log; treat as a leak (incident.md §5)"
++  fi
++  rm -f "$scan"
++  lc_info "rotate-superuser ok: postgres log scanned clean; update the offline encrypted secrets copy (backup-restore.md §7)"
++}
++
++# pitr_cutover — docs/runbooks/backup-restore.md §6 (owner approval). Replaces the live cluster
++#   with the one `restore-pitr --promote` left in pitr-scratch: check it -> stop writers +
++#   postgres -> pitr-install.sh --install (live pgdata mounted ONLY for that run; old data dir
++#   kept as 18/docker.pre-pitr-<UTC>) -> start postgres -> prove: not in recovery, timeline > 1,
++#   WAL switch archived with failed unchanged, timeline history file in the archive ->
++#   provision-logins (service passwords = current secrets) -> new base backup. Writers stay
++#   STOPPED: reopen step by step (§5 4-7), e.g. with deploy.sh first.
++pitr_cutover() {
++  local s svcs=() tli hist in_rec pgvol
++  [[ "${LC_CONFIRM_REPLACE_LIVE:-}" == I_UNDERSTAND_FORWARD_ONLY ]] ||
++    lc_die "pitr-cutover replaces the live database: set LC_CONFIRM_REPLACE_LIVE=I_UNDERSTAND_FORWARD_ONLY (owner approval)" 2
++  lc_service_active postgres || lc_die "postgres is not an active service here (run on the DB host)"
++  run_ops /ops/pitr-install.sh --check || lc_die "no promoted PITR cluster to install (pg-ops.sh restore-pitr --target-time TS --promote)"
++  # The docker volume the postgres container really uses for /var/lib/postgresql. `run -v pgdata:..`
++  # would NOT resolve to the project volume: Compose passes it through and Docker creates a new,
++  # empty global volume literally named "pgdata" (VERIFIED_LOCAL).
++  pgvol=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql"}}{{.Name}}{{end}}{{end}}' \
++    "$(lc_compose ps -a -q postgres)" 2>/dev/null || true)
++  [[ "$pgvol" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || lc_die "cannot resolve the postgres data volume (container missing?)"
++  for s in "${WRITER_SERVICES[@]}"; do
++    if lc_service_active "$s"; then svcs+=("$s"); fi
++  done
++  lc_info "stopping writers: ${svcs[*]:-none}; then postgres"
++  ((${#svcs[@]} == 0)) || lc_compose stop "${svcs[@]}"
++  lc_compose stop postgres
++  lc_info "installing into volume $pgvol (mounted at /live for this one pg-ops run)"
++  lc_compose_with_ops run --rm --no-deps -T -v "$pgvol:/live" pg-ops /ops/pitr-install.sh --install ||
++    lc_die "install failed (live data dir unchanged or restored); postgres is STOPPED: docker compose up -d postgres"
++  lc_compose up -d --no-deps postgres
++  wait_postgres_healthy
++  in_rec=$(lc_psql <<<"SELECT pg_is_in_recovery();")
++  tli=$(lc_psql <<<"SELECT timeline_id FROM pg_control_checkpoint();")
++  [[ "$in_rec" == f ]] || lc_die "cut-over server is still in recovery"
++  [[ "$tli" =~ ^[0-9]+$ ]] && ((tli > 1)) || lc_die "cut-over server is on timeline ${tli:-?}, expected > 1"
++  archive_switch_ok || lc_die "WAL archiving fails after the cut-over (watchdog W4; incident.md §postgres)"
++  hist=$(printf '%08X.history' "$tli")
++  [[ -f "$LC_BACKUP_DIR/wal/$hist" ]] || lc_die "timeline history $hist did not reach $LC_BACKUP_DIR/wal"
++  lc_info "cut-over ok: in_recovery=f timeline=$tli history=$hist archived"
++  lc_compose run --rm -T --no-deps provision-logins || lc_die "provision-logins failed after the cut-over (service logins not usable)"
++  run_ops /ops/basebackup.sh || lc_die "base backup after the cut-over failed; take one before reopening (new timeline)"
++  lc_info "pitr-cutover done. Writers are STOPPED; reopen per backup-restore.md §5 steps 4-7 (deploy/scripts/deploy.sh first brings the stack back with post-checks)"
++}
+ 
+ case "$cmd" in
+ backup) run_ops /ops/backup.sh "$@" ;;
+@@ -44,6 +173,14 @@ restore-dump)
+   run_ops /ops/restore-dump.sh "$src" "$@"
+   ;;
+ restore-pitr) run_ops /ops/restore-pitr.sh "$@" ;;
++pitr-cutover)
++  (($# == 0)) || lc_die "usage: pg-ops.sh pitr-cutover" 2
++  pitr_cutover
++  ;;
++rotate-superuser)
++  (($# == 0)) || lc_die "usage: pg-ops.sh rotate-superuser" 2
++  rotate_superuser
++  ;;
+ list)
+   for d in dumps base; do
+     echo "== $d ($LC_BACKUP_DIR/$d)"
+@@ -54,5 +191,5 @@ list)
+   done
+   echo "== wal segments: $(find "$LC_BACKUP_DIR/wal" -maxdepth 1 -type f 2>/dev/null | wc -l)"
+   ;;
+-*) lc_die "usage: pg-ops.sh backup [--tag T] | basebackup | restore-dump <dir> [...] | restore-pitr --target-time TS [--drill] | list" 2 ;;
++*) lc_die "usage: pg-ops.sh backup [--tag T] | basebackup | restore-dump <dir> [...] | restore-pitr --target-time TS [--drill|--promote] | pitr-cutover | rotate-superuser | list" 2 ;;
+ esac
+diff --git a/deploy/scripts/smoke.sh b/deploy/scripts/smoke.sh
+index c6d184c..550dab1 100755
+--- a/deploy/scripts/smoke.sh
++++ b/deploy/scripts/smoke.sh
+@@ -4,10 +4,14 @@
+ #   static  S01-S06: script syntax (+shellcheck when installed), digest pins, compose config for
+ #           all profile sets (+ two-host override), lcentry vet/tests/coverage, Caddyfile
+ #           validate/fmt, ignore files. Needs no running containers.
+-#   full    static + S07-S39 on an ISOLATED project "lc-smoke-<run>" with temp config, temp
++#   full    static + S07-S43 on an ISOLATED project "lc-smoke-<run>" with temp config, temp
+ #           secrets and temp backup dir, *.localhost hosts on 127.0.0.1, identity=0 (no IdP),
+ #           buyer=1, buyer_payment=0, meta_webhook=0, studio=0. It touches ONLY its own
+ #           project and removes its containers/volumes/networks/temp dirs at the end.
++#           Review-P1 regression cases (2026-09-28): S40 access-log redaction of credential query
++#           parameters (Caddy), S41 superuser rotation without the password reaching the postgres
++#           log, S42 PITR promote + cut-over (new timeline, rows == target, archiver healthy),
++#           S43 compose.env IMAGE_TAG follows deploy.sh (plain `up -d` keeps the tag; watchdog W10).
+ # Usage: smoke.sh static | full
+ # Exit: 0 PASS, 1 FAIL, 3 BLOCKED (e.g. cmd/migrate missing, ports busy, docker missing, or a
+ #   REQUIRES_INTEGRATOR item observed at runtime: S29m = I8). result.json "not_run" names each one.
+@@ -174,7 +178,7 @@ EOF
+ }
+ 
+ # ================================ full ============================================================
+-ALL_FULL=(S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S29m S30 S31 S32 S33 S34 S35 S36 S37 S38 S39)
++ALL_FULL=(S07 S08 S09 S10 S11 S12 S13 S14 S15 S16 S17 S18 S19 S20 S21 S22 S23 S24 S25 S26 S27 S28 S29 S29m S30 S31 S32 S33 S34 S35 S36 S37 S38 S39 S40 S41 S42 S43)
+ block_rest() { # reason — mark every full case not yet recorded as BLOCKED
+   local id
+   for id in "${ALL_FULL[@]}"; do
+@@ -385,6 +389,28 @@ full_cases() {
+   if [[ "$r1" == "308 https://shop.localhost"* && "${r2#*|}" == 0 && -z "$(hdr x-frame-options)" ]]; then
+     rec S22 PASS "http->https 308; unknown Host not proxied (${r2%%|*}, empty)"
+   else rec S22 FAIL "redirect=[$r1] unknown=[$r2]"; fi
++  # S40 (review P1) access-log redaction: Caddy logs the full request URI, so a Meta
++  # hub.verify_token (owner secret commerce_meta_apps_json) or an OIDC code/state on the admin
++  # callback would sit in the json-file logs and diagnostics bundles. Random canaries go through
++  # the hooks and admin hosts (query string, Referer, and the http->https redirect whose Location
++  # echoes the query); none may appear in ANY container log, and the REDACTED forms must be there
++  # (proves the lines were written, so 0 hits is meaningful).
++  local canary hits
++  canary="lcCanary$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
++  edge hooks.localhost "/v1/meta/webhooks/1/page?hub.mode=subscribe&hub.challenge=42&hub.verify_token=${canary}v" >/dev/null
++  edge admin.localhost "/api/auth/callback?code=${canary}c&state=${canary}s" \
++    -H "Referer: https://admin.localhost/api/auth/callback?code=${canary}r&state=${canary}q" >/dev/null
++  "${CURL[@]}" -o /dev/null --resolve "admin.localhost:$HTTP_PORT:127.0.0.1" \
++    "http://admin.localhost:$HTTP_PORT/api/auth/callback?code=${canary}l&state=${canary}m" >/dev/null 2>&1 || true
++  sleep 2
++  lc_compose logs --no-color >"$EV/logs/S40-compose.log" 2>&1 || true
++  hits=$({ grep -c -- "$canary" "$EV/logs/S40-compose.log" || true; } | tail -n1)
++  if [[ "$hits" == 0 ]] && grep -q 'hub.challenge=42&hub.mode=subscribe&hub.verify_token=REDACTED' "$EV/logs/S40-compose.log" &&
++    grep -q '/api/auth/callback?code=REDACTED&state=REDACTED' "$EV/logs/S40-compose.log" &&
++    grep -q '"Referer":\["https://admin.localhost/api/auth/callback?code=REDACTED&state=REDACTED"\]' "$EV/logs/S40-compose.log" &&
++    grep -q '"Location":\["https://admin.localhost[^"]*/api/auth/callback?code=REDACTED&state=REDACTED"\]' "$EV/logs/S40-compose.log"; then
++    rec S40 PASS "canary verify_token/code/state absent from all logs; uri, Referer and redirect Location logged as REDACTED"
++  else rec S40 FAIL "canary hits=$hits or REDACTED form missing (logs/S40-compose.log)"; fi
+   runc S24 lc_compose stop api || true
+   r=$(edge api.localhost /healthz)
+   local retry
+@@ -471,6 +497,45 @@ full_cases() {
+     rec S31 PASS "PITR drill paused at target, verify PASS, $out (RTO sample; physical restore keeps the media gate)"
+   else rec S31 FAIL "restore-pitr drill (logs/S31.log)"; fi
+ 
++  # S41 (review P1) superuser rotation: the live server runs log_statement='ddl', so a bare
++  # ALTER ROLE ... PASSWORD would be logged in cleartext. pg-ops.sh rotate-superuser must change
++  # the value (in place, same inode), keep the file mode, reject the old password, leave NO old or
++  # new value in the postgres log, and everything that uses the superuser must keep working:
++  # lc_psql (running container's mount), migrate (re-derived dsn_migrate_owner). A DDL canary
++  # proves statement logging is live, so a clean scan is meaningful. Later cases (S35 watchdog,
++  # S36 diagnostics scan, S38 backup/migrate/provision, S42 PITR) all run on the rotated password.
++  local old_pw old_sum old_ino ddl_canary pglog="$EV/logs/S41-postgres.log" why41=""
++  old_pw=$(<"$LC_SECRETS_DIR/pg_superuser_password")
++  old_sum=$(sha256sum <"$LC_SECRETS_DIR/pg_superuser_password")
++  old_ino=$(stat -c '%i %a' "$LC_SECRETS_DIR/pg_superuser_password")
++  ddl_canary="lc_smoke_ddl_canary_$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
++  if ! runc S41 "$LC_SCRIPTS_DIR/pg-ops.sh" rotate-superuser; then
++    why41="rotate-superuser failed"
++  elif [[ "$(sha256sum <"$LC_SECRETS_DIR/pg_superuser_password")" == "$old_sum" ]]; then
++    why41="secret file unchanged"
++  elif [[ "$(stat -c '%i %a' "$LC_SECRETS_DIR/pg_superuser_password")" != "$old_ino" ]]; then
++    why41="secret file inode/mode changed (running container would keep the old value)"
++  elif ! grep -q 'old_password=rejected result=ok' "$EV/logs/S41.log"; then
++    why41="old password not proven rejected"
++  elif [[ "$(lc_psql <<<"CREATE TEMP TABLE $ddl_canary (x int); SELECT 1;" 2>>"$EV/logs/S41.log")" != 1 ]]; then
++    why41="lc_psql fails after rotation"
++  elif ! runc S41 lc_compose run --rm -T migrate; then
++    why41="migrate fails after rotation (dsn_migrate_owner not re-derived?)"
++  else
++    lc_compose logs --no-color postgres >"$pglog" 2>&1 || true
++    if ! grep -q "$ddl_canary" "$pglog"; then
++      why41="DDL canary not in the postgres log: statement logging not live, scan would be vacuous"
++    elif ! lc_secret_scan "$pglog" 2>>"$EV/logs/S41.log"; then
++      why41="a secret value (new superuser password?) is in the postgres log"
++    elif grep -qFf <(printf '%s\n' "$old_pw") "$pglog"; then
++      why41="the old superuser password is in the postgres log"
++    fi
++  fi
++  unset old_pw
++  if [[ -z "$why41" ]]; then
++    rec S41 PASS "rotated in place (inode/mode kept), old rejected, lc_psql + migrate ok, DDL logging live, no old/new value in postgres log"
++  else rec S41 FAIL "$why41 (logs/S41.log)"; fi
++
+   # S34 browser (optional)
+   if has node && (cd "$LC_REPO_ROOT" && node -e "import('@playwright/test')" >/dev/null 2>&1); then
+     rc=0
+@@ -525,27 +590,116 @@ full_cases() {
+   #   c) back to SMOKE_TAG (recreate again);
+   #   d) to a tag recorded with a different ledger count: REFUSED ("forward-fix only").
+   # The -rb tags are removed afterwards (they only name existing images; nothing is rebuilt).
+-  local rb_tag="${SMOKE_TAG}-rb" why=""
++  # S43 (review P1) rides on b) and c): deploy.sh must write the tag it brings up into compose.env,
++  # because every other Compose entry point (runbook `dc up`/`dc run migrate`, §8 domain change, a
++  # re-run of `first`) takes IMAGE_TAG from that file. While the stack runs the -rb tag:
++  #   compose.env says -rb; a PLAIN `up -d` with no IMAGE_TAG in the environment (what an operator's
++  #   `dc up -d` does) keeps every lc-* service on -rb; watchdog W10 PASSes, and FAILs against a
++  #   copy of compose.env naming another tag. After c) compose.env is back on SMOKE_TAG, and the
++  #   refused d) leaves it untouched.
++  local rb_tag="${SMOKE_TAG}-rb" why="" why43=""
++  env_tag() { lc_env_file_get "$LC_COMPOSE_ENV" IMAGE_TAG || true; }
++  s43_on_rb() {
++    local s img w10copy
++    [[ "$(env_tag)" == "$rb_tag" ]] || { why43="b) compose.env IMAGE_TAG=$(env_tag) after app-rollback $rb_tag" && return; }
++    (unset IMAGE_TAG && runc S43 lc_compose up -d) || { why43="plain up -d failed" && return; }
++    for s in api admin storefront caddy expiry-worker payment-worker-sandbox meta-worker; do
++      img=$(docker inspect -f '{{.Config.Image}}' "$(lc_compose ps -q "$s")" 2>/dev/null || echo "<no container>")
++      [[ "$img" == *":$rb_tag" ]] || { why43="plain up -d moved $s to $img" && return; }
++    done
++    (unset IMAGE_TAG && LC_TLS_MIN_DAYS=0 runc S43 "$LC_SCRIPTS_DIR/watchdog.sh") || true
++    grep -q "^W10 PASS .*IMAGE_TAG=$rb_tag" "$EV/logs/S43.log" || { why43="watchdog W10 did not PASS on $rb_tag" && return; }
++    w10copy=$(mktemp "$SMOKE_ROOT/w10.XXXXXX")
++    cp -p "$LC_COMPOSE_ENV" "$w10copy"
++    lc_env_file_set "$w10copy" IMAGE_TAG "$SMOKE_TAG"
++    if (unset IMAGE_TAG && LC_COMPOSE_ENV=$w10copy LC_TLS_MIN_DAYS=0 runc S43 "$LC_SCRIPTS_DIR/watchdog.sh"); then
++      why43="watchdog passed although compose.env names $SMOKE_TAG and containers run $rb_tag"
++    elif ! grep -q "^W10 FAIL api runs tag $rb_tag but compose.env IMAGE_TAG=$SMOKE_TAG" "$EV/logs/S43.log"; then
++      why43="W10 drift message missing"
++    fi
++    rm -f "$w10copy"
++  }
++  # s39_steps — a) .. d) in order; the first failing step sets `why` and stops the sequence.
++  s39_steps() {
++    runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$SMOKE_TAG" ||
++      { why="a) no-op rollback to the running tag failed" && return; }
++    runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$rb_tag" ||
++      { why="b) rollback to a different tag failed" && return; }
++    [[ "$(docker inspect -f '{{.Config.Image}}' "$(lc_compose ps -q api)" 2>/dev/null || true)" == "$p-go:$rb_tag" ]] ||
++      { why="b) api was not recreated on $rb_tag" && return; }
++    s43_on_rb # verdict in why43; S39 continues either way
++    runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$SMOKE_TAG" ||
++      { why="c) rollback back to $SMOKE_TAG failed" && return; }
++    if runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback smoke-fabricated; then
++      why="d) rollback with a changed ledger was allowed"
++      return
++    fi
++    grep -q REFUSED "$EV/logs/S39.log" || why="d) refusal message missing"
++  }
+   for i in go admin storefront caddy; do docker tag "$p-$i:$SMOKE_TAG" "$p-$i:$rb_tag"; done
+   printf '%s\tupgrade\t%s\t%s\t%s\n' "$(lc_ts)" "$rb_tag" "$(lc_ledger_count)" smoke >>"$LC_STATE_DIR/deployments.log"
+   printf '%s\tupgrade\t%s\t%s\t%s\n' "$(lc_ts)" smoke-fabricated 1 smoke >>"$LC_STATE_DIR/deployments.log"
+-  if ! runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$SMOKE_TAG"; then
+-    why="a) no-op rollback to the running tag failed"
+-  elif ! runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$rb_tag"; then
+-    why="b) rollback to a different tag failed"
+-  elif [[ "$(docker inspect -f '{{.Config.Image}}' "$(lc_compose ps -q api)")" != "$p-go:$rb_tag" ]]; then
+-    why="b) api was not recreated on $rb_tag"
+-  elif ! runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback "$SMOKE_TAG"; then
+-    why="c) rollback back to $SMOKE_TAG failed"
+-  elif runc S39 "$LC_SCRIPTS_DIR/deploy.sh" --smoke app-rollback smoke-fabricated; then
+-    why="d) rollback with a changed ledger was allowed"
+-  elif ! grep -q REFUSED "$EV/logs/S39.log"; then
+-    why="d) refusal message missing"
++  s39_steps
++  if [[ -z "$why" && -z "$why43" && "$(env_tag)" != "$SMOKE_TAG" ]]; then
++    why43="c)/d) compose.env IMAGE_TAG=$(env_tag), expected $SMOKE_TAG"
+   fi
+   for i in go admin storefront caddy; do docker image rm "$p-$i:$rb_tag" >/dev/null 2>&1 || true; done
+   if [[ -z "$why" ]]; then
+     rec S39 PASS "rollback: no-op to running tag, to a different tag (recreated), back, refused on changed ledger"
+   else rec S39 FAIL "$why (logs/S39.log)"; fi
++  if [[ -n "$why" ]]; then
++    rec S43 FAIL "not evaluated: S39 $why"
++  elif [[ -z "$why43" ]]; then
++    rec S43 PASS "compose.env follows app-rollback (-rb, back); plain up -d kept -rb; W10 PASS, and FAIL on drift"
++  else rec S43 FAIL "$why43 (logs/S43.log)"; fi
++
++  # S42 (review P1) PITR promotion + cut-over, backup-restore.md §6, on this smoke stack: marker
++  # row 1 before the target, row 2 after it. `restore-pitr --promote` ends recovery AT the target
++  # (new timeline), `pitr-cutover` installs it as the live cluster. Must hold: only row 1, not in
++  # recovery, timeline > 1, WAL archiving healthy (the old §6 procedure crash-recovered past the
++  # target on timeline 1 and then failed archiving forever), the timeline history archived, and
++  # the whole stack back through `deploy.sh first` (post-checks) with a green watchdog.
++  local why42="" tli42 rows42
++  lc_psql <<<"CREATE SCHEMA lc_smoke_pitr; CREATE TABLE lc_smoke_pitr.marker (id int PRIMARY KEY); INSERT INTO lc_smoke_pitr.marker VALUES (1);" >/dev/null
++  sleep 2
++  target=$(lc_psql <<<"SELECT now();")
++  sleep 2
++  lc_psql <<<"INSERT INTO lc_smoke_pitr.marker VALUES (2);" >/dev/null
++  a0=$(lc_psql <<<"SELECT archived_count FROM pg_stat_archiver;")
++  lc_psql <<<"SELECT pg_switch_wal();" >/dev/null
++  for ((i = 0; i < 30; i++)); do
++    a1=$(lc_psql <<<"SELECT archived_count FROM pg_stat_archiver;")
++    ((a1 > a0)) && break
++    sleep 1
++  done
++  if ! runc S42 "$LC_SCRIPTS_DIR/pg-ops.sh" restore-pitr --target-time "$target" --promote; then
++    why42="restore-pitr --promote failed"
++  elif ! grep -q '^pitr_promoted_timeline=[2-9]' "$EV/logs/S42.log"; then
++    why42="no promoted timeline reported"
++  elif runc S42 "$LC_SCRIPTS_DIR/pg-ops.sh" pitr-cutover; then
++    why42="pitr-cutover ran without LC_CONFIRM_REPLACE_LIVE"
++  elif ! LC_CONFIRM_REPLACE_LIVE=I_UNDERSTAND_FORWARD_ONLY runc S42 "$LC_SCRIPTS_DIR/pg-ops.sh" pitr-cutover; then
++    why42="pitr-cutover failed"
++  else
++    rows42=$(lc_psql <<<"SELECT count(*) || ':' || max(id) FROM lc_smoke_pitr.marker;" 2>>"$EV/logs/S42.log" || true)
++    tli42=$(lc_psql <<<"SELECT timeline_id FROM pg_control_checkpoint();" 2>>"$EV/logs/S42.log" || true)
++    if [[ "$rows42" != "1:1" ]]; then
++      why42="marker rows=$rows42, expected 1:1 (data after the target came back)"
++    elif ! [[ "$tli42" =~ ^[0-9]+$ ]] || ((tli42 < 2)); then
++      why42="timeline=$tli42 after cut-over"
++    elif [[ ! -f "$LC_BACKUP_DIR/wal/$(printf '%08X.history' "$tli42")" ]]; then
++      why42="timeline history not archived"
++    elif ! runc S42 "$LC_SCRIPTS_DIR/deploy.sh" --smoke first; then
++      why42="deploy.sh first after the cut-over failed"
++    elif ! LC_TLS_MIN_DAYS=0 runc S42 "$LC_SCRIPTS_DIR/watchdog.sh"; then
++      why42="watchdog not green after the cut-over"
++    elif ! grep -q '^W4 PASS archived=[0-9]* failed=0' "$EV/logs/S42.log"; then
++      why42="W4 archiver not clean after the cut-over"
++    fi
++  fi
++  if [[ -z "$why42" ]]; then
++    rec S42 PASS "promote + cut-over: rows=$rows42 timeline=$tli42, history archived, archiver failed=0, stack back via deploy.sh first, watchdog green"
++  else rec S42 FAIL "$why42 (logs/S42.log)"; fi
+ 
+   # S32 graceful stop
+   runc S32 lc_compose stop || true
+@@ -590,7 +744,7 @@ def ver(cmd):
+     except Exception:
+         return "unavailable"
+ static_ids = ["S01", "S02", "S03", "S04", "S05", "S06"]
+-full_ids = static_ids + ["S%02d" % i for i in range(7, 40)] + ["S10a", "S10b", "S10c", "S10d", "S10e", "S29m"]
++full_ids = static_ids + ["S%02d" % i for i in range(7, 44)] + ["S10a", "S10b", "S10c", "S10d", "S10e", "S29m"]
+ result = {
+     "run_id": os.path.basename(ev), "task_id": "T22", "commit": commit,
+     "environment": {"mode": mode, "host": platform.node(), "kernel": platform.release(),
+diff --git a/deploy/scripts/watchdog.sh b/deploy/scripts/watchdog.sh
+index 9bd2e5e..50506b6 100755
+--- a/deploy/scripts/watchdog.sh
++++ b/deploy/scripts/watchdog.sh
+@@ -1,13 +1,16 @@
+ #!/usr/bin/env bash
+ # File: deploy/scripts/watchdog.sh
+-# Purpose: periodic health checks W1-W9 (deploy-design §16.3). Exit != 0 when any check fails,
++# Purpose: periodic health checks W1-W10 (deploy-design §16.3). Exit != 0 when any check fails,
+ #   so cron mails it / systemd marks it; optionally POSTs ONLY the failing check ids to
+ #   LC_ALERT_WEBHOOK_URL and writes one syslog line via `logger`.
+ #   W1 services running/healthy + restart counts unchanged   W2 disk > 80 %
+ #   W3 newest dump > 26 h / newest base > 8 d                  W4 WAL archiving failing
+ #   W5 TLS certificate expiry < LC_TLS_MIN_DAYS (14)          W6 River backlog per schema
+ #   W7 transactions / idle-in-transaction older than 5 min     W8 readiness gates false
+-#   W9 connections > 80 % of max_connections
++#   W9 connections > 80 % of max_connections                 W10 image tag drift: a running
++#   ${LC_IMAGE_PREFIX}-* container whose tag differs from the IMAGE_TAG line IN compose.env (the
++#   file, not the environment: deploy.sh keeps it = deployed tag, review P1; drift means a plain
++#   `docker compose up` would change images)
+ # Usage: watchdog.sh        (cron: */5 * * * *, deploy/host/crontab.example)
+ # Runs as/in: deploy host (root); DB checks (W3, W4, W6-W9) only where postgres is an active
+ #   service (single host / DB host). SQL runs via lc_psql inside the postgres container over
+@@ -18,7 +21,8 @@
+ # State: ${LC_STATE_DIR}/watchdog.state (restart counts, last run time for W6 discarded jobs).
+ # Used by: cron; smoke.sh S35; collect-diagnostics.sh; docs/runbooks/incident.md §分诊.
+ # Depends on: lib.sh, docker, openssl (W5), df, curl (webhook), logger (optional).
+-# Status: DESIGN; verified by smoke S35 (healthy -> 0; stopped worker -> W1 failure).
++# Status: DESIGN; verified by smoke S35 (healthy -> 0; stopped worker -> W1 failure) and S43
++#   (W10 PASS on the deployed tag, FAIL against a compose.env naming another tag).
+ # Change rules: every new long-running service is covered by W1 automatically; new River
+ #   schemas must be added to W6.
+ set -Eeuo pipefail
+@@ -72,6 +76,21 @@ while IFS= read -r s; do
+ done < <(lc_long_running_services)
+ ((w1)) || report W1 PASS "services running/healthy"
+ 
++# ---- W10 image tag drift -------------------------------------------------------------------------------
++want_tag=$(lc_env_file_get "$LC_COMPOSE_ENV" IMAGE_TAG || true)
++prefix="${LC_IMAGE_PREFIX:-lc}-"
++w10=0
++while IFS= read -r s; do
++  cid=$(lc_compose ps -q "$s" 2>/dev/null || true)
++  [[ -n "$cid" ]] || continue # absence is W1's finding
++  image=$(docker inspect -f '{{.Config.Image}}' "$cid" 2>/dev/null || true)
++  if [[ "$image" == "$prefix"* && "$image" != *":$want_tag" ]]; then
++    report W10 FAIL "$s runs tag ${image##*:} but compose.env IMAGE_TAG=${want_tag:-<unset>}"
++    w10=1
++  fi
++done < <(lc_long_running_services)
++((w10)) || report W10 PASS "all ${prefix}* containers run compose.env IMAGE_TAG=${want_tag:-<unset>}"
++
+ # ---- W2 disk ------------------------------------------------------------------------------------------
+ docker_root=$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
+ for path in "$docker_root" "${LC_BACKUP_DIR:-/}"; do
+diff --git a/deploy/secrets.manifest.tsv b/deploy/secrets.manifest.tsv
+index 2f46554..ed0d24b 100644
+--- a/deploy/secrets.manifest.tsv
++++ b/deploy/secrets.manifest.tsv
+@@ -22,7 +22,7 @@
+ #   service's *_FILE wiring; pw_/dsn_ rows must match the core rows of deploy/postgres/logins.tsv.
+ #   Losing commerce_account_keys_json makes stored PSP credentials undecryptable: keep the
+ #   owner's encrypted offline copy (docs/runbooks/backup-restore.md §密钥备份).
+-pg_superuser_password	hex32	gen	postgres,provision-logins,pg-ops	ALTER ROLE postgres PASSWORD via pg-ops psql, rewrite file, then secrets-init.sh --rederive (dsn_migrate_owner)
++pg_superuser_password	hex32	gen	postgres,provision-logins,pg-ops	deploy/scripts/pg-ops.sh rotate-superuser only (ALTER ROLE with statement logging off, in-place file write, --rederive of dsn_migrate_owner, log scan); never a bare ALTER ROLE (log_statement=ddl)
+ dsn_migrate_owner	dsn_socket	derive	migrate	derived from pg_superuser_password (secrets-init.sh --rederive)
+ pw_lc_api_runtime	hex32	gen	provision-logins	rewrite file, secrets-init.sh --rederive, run provision-logins, restart api
+ pw_lc_api_identity	hex32	gen	provision-logins	rewrite file, secrets-init.sh --rederive, run provision-logins, restart api
+diff --git a/docs/runbooks/backup-restore.md b/docs/runbooks/backup-restore.md
+index e5ee179..c0b4cc5 100644
+--- a/docs/runbooks/backup-restore.md
++++ b/docs/runbooks/backup-restore.md
+@@ -6,6 +6,8 @@ Reads env / secrets: 无（本文不含任何密钥值）。
+ Used by: 运维/owner；deploy/README.md 与 deploy.md 链接到此。
+ Depends on: deploy/scripts/pg-ops.sh, deploy/postgres/ops/*, deploy/postgres/postgresql.conf（WAL 归档）。
+ Status: DESIGN；备份/恢复/PITR 已用 scratch 镜像本地验证（VERIFIED_LOCAL），未在真实数据上执行。
++  2026-09-28 评审 P1 修复：§6 旧流程（复制"暂停中被快速停止"的集群并删除 recovery.signal）会让在线库越过目标时间做崩溃恢复、
++  停留在时间线 1，并让归档永久失败。现改为 `restore-pitr --promote` + `pitr-cutover` 两个脚本（smoke S42）。
+ Change rules: 恢复顺序遵循 架构.md §22.3；修改脚本默认行为（新库/临时集群）必须经过评审。
+ -->
+ # 备份与恢复运行手册
+@@ -53,6 +55,7 @@ cd ${LC_BACKUP_DIR}/dumps/<目录> && sha256sum -c SHA256SUMS
+   ```
+   `verify.sql` 检查三项：ledger 行数与 manifest 一致；支付、过期、Meta 三个就绪门禁为真；各 schema 的表数量。
+ - **每季度**：PITR 演练。在 pg-ops 内的临时集群执行，完全不接触生产 PGDATA，并且关闭归档。
++  临时集群的 socket 使用 peer 认证，所以超级用户口令轮换（deploy.md §7）之后，用更早的 base backup 也能演练。
+   ```sh
+   deploy/scripts/pg-ops.sh restore-pitr --target-time '2026-09-28 03:00:00+00' --drill
+   ```
+@@ -77,7 +80,7 @@ cd ${LC_BACKUP_DIR}/dumps/<目录> && sha256sum -c SHA256SUMS
+      LC_CONFIRM_REPLACE_LIVE=I_UNDERSTAND_FORWARD_ONLY deploy/scripts/pg-ops.sh restore-dump <目录> --replace-live
+      ```
+      如果目标是全新集群，加 `--fresh-cluster`（先导入角色），再执行 `docker compose run --rm -T --no-deps provision-logins` 为登录角色设置密码。
+-   - 方案 B：PITR，见 §6。
++   - 方案 B：PITR，见 §6（`pitr-cutover` 已包含 provision-logins 和新的 base backup）。
+ 4. **先开放身份和只读订单**，验证数据正确。
+ 5. **处理删除/撤回的墓碑记录**（K23），然后对账 PSP：对照 PAYUNi 商户后台逐笔核对 `river_payment` 中的 job 和支付状态。
+    **历史外部副作用绝不自动重放**，UNKNOWN 状态不能盲目重试。
+@@ -89,17 +92,48 @@ cd ${LC_BACKUP_DIR}/dumps/<目录> && sha256sum -c SHA256SUMS
+ - 自动重放外部副作用。
+ - 删除失败证据。
+ 
+-## 6. 提升 PITR 集群（人工，需在所有服务停止后执行）
+-
+-1. 执行 `restore-pitr --target-time <T>`，**不带 `--drill`**，校验通过。已停止的集群保留在 `pitr-scratch` 卷的 `pitr/pgdata`。
+-2. 停止全部服务，包括 postgres：`docker compose stop`。
+-3. 用一个 root 的一次性容器，把 `pitr-scratch` 卷中的 `pitr/pgdata` 复制到 `pgdata` 卷的 `18/docker`：
+-   - 复制前先把原 `pgdata` 卷整体改名备份，例如 `docker volume create` 一个新卷后复制。
+-   - 删除 `recovery.signal`，保持属主为 999:999。
+-4. 启动 postgres，检查日志中出现新时间线；执行 `SELECT pg_is_in_recovery()`，结果应为 `f`。
+-   如果服务器仍停在 pause 状态，执行 `SELECT pg_wal_replay_resume()` 或在配置中 promote。
+-5. 按照 §5 的第 4–7 步逐步开放。
+-6. 立刻执行一次新的 base backup，因为时间线已经改变。
++## 6. PITR 切换（需要 owner 批准；两个命令，不需要手工改数据目录）
++
++为什么不能再用旧流程：`restore-pitr`（不带参数）在**暂停状态**下快速停止集群，pg_control 状态是 `shut down in recovery`。
++删除 `recovery.signal` 后把它当在线库启动，PostgreSQL 只做普通崩溃恢复：重放 pg_wal 里剩下的全部 WAL（越过目标时间，
++把目标之后的事务带回来），并停留在时间线 1；接着同名段已在 `/backup/wal` 中且内容不同，`archive_command` 的 `cmp` 分支永久拒绝，
++W4 一直失败，pg_wal 持续增长直到磁盘写满（评审用固定镜像复现：目标时 200 行，切换后 400 行，timeline_id=1，failed=3）。
++
++1. **在临时集群里恢复并提升**（在线库不受影响，可以提前做）：
++   ```sh
++   deploy/scripts/pg-ops.sh restore-pitr --target-time '<T>' --promote
++   ```
++   - 暂停在目标 → `verify.sql` → `pg_wal_replay_resume()`，恢复**恰好在目标处结束**并提升到新时间线（写出 `0000000N.history`）
++     → `CHECKPOINT` → 把超级用户口令设为**当前**密钥文件的值（语句日志已在会话内关闭）→ 干净停止（状态 `shut down`）。
++   - 临时服务器此时用 `archive_mode=on` + **空的** `archive_command`：不向归档写任何东西，但 history 文件和新段的 `.ready` 标记会保留，
++     切换后由在线库归档。
++   - 输出 `pitr_promoted_timeline=N`（N ≥ 2）。失败时不会留下 `PROMOTED` 标记，第 2 步会拒绝。
++2. **切换**（停机窗口；Caddy 在此期间返回 503 + `Retry-After`）：
++   ```sh
++   LC_CONFIRM_REPLACE_LIVE=I_UNDERSTAND_FORWARD_ONLY deploy/scripts/pg-ops.sh pitr-cutover
++   ```
++   脚本依次执行：
++   - 检查临时集群：有 `PROMOTED` 标记、状态 `shut down`（不是 `shut down in recovery`）、时间线 > 1、没有 `recovery.signal`/`standby.signal`；
++   - 停止写入方（api、admin、storefront、各 worker），再停止 postgres；
++   - 只在这一次 pg-ops 运行中挂载在线 pgdata 卷：确认在线库已干净停止、空间足够，把 `18/docker` 改名为 `18/docker.pre-pitr-<UTC>`（回退副本），
++     再把提升后的集群复制为 `18/docker`；
++   - 启动 postgres，并验证：`pg_is_in_recovery()` = `f`；`SELECT timeline_id FROM pg_control_checkpoint()` > 1；
++     强制一次 WAL 切换后 `pg_stat_archiver` 的 archived 增加、failed **不变**；`${LC_BACKUP_DIR}/wal/0000000N.history` 已归档；
++   - `provision-logins`（登录角色口令恢复为当前密钥值，并检查就绪门禁）；
++   - 立即做新的 base backup（新时间线的起点）。
++   - **写入方保持停止**。
++3. 按 §5 第 4–7 步逐步开放；`deploy/scripts/deploy.sh first` 会拉起全部服务并执行部署后检查。之后 `watchdog.sh` 应全部 PASS（W4 failed=0）。
++4. 清理回退副本（owner 签字、新 base backup 已完成后）：
++   ```sh
++   dc --profile ops run --rm --no-deps -T -v <项目>_pgdata:/live pg-ops -c 'rm -rf -- /live/18/docker.pre-pitr-<UTC>'
++   ```
++   `<项目>_pgdata` 是 postgres 容器实际使用的卷名（`docker inspect -f '{{range .Mounts}}{{.Name}} {{end}}' <postgres 容器>`）。
++   注意：`-v pgdata:/live` **不会**解析成项目卷，Docker 会新建一个名为 `pgdata` 的空卷。
++
++回退（仅限切换后还没有新的业务写入，owner 决定）：停止 postgres，用同样的 pg-ops 挂载执行
++`mv /live/18/docker /live/18/docker.rejected-pitr-<UTC> && mv /live/18/docker.pre-pitr-<UTC> /live/18/docker`，再启动 postgres。
++回退后必须把 `${LC_BACKUP_DIR}/wal/0000000N.history` 移出归档目录（例如移到 `${LC_BACKUP_DIR}/wal-rejected/`），
++否则以后的 PITR 会跟随这个被放弃的时间线（`requested timeline N is not a child of this server's history`）；然后立即做新的 base backup。
+ 
+ ## 7. 密钥备份与恢复
+ 
+diff --git a/docs/runbooks/deploy.md b/docs/runbooks/deploy.md
+index f6fe3cd..24ce933 100644
+--- a/docs/runbooks/deploy.md
++++ b/docs/runbooks/deploy.md
+@@ -7,6 +7,8 @@ Used by: 运维/owner/集成者；deploy/README.md 链接到此。
+ Depends on: deploy/scripts/*.sh, deploy/compose.yml, deploy/env/*.env.example。
+ Status: DESIGN。未在生产执行过；smoke full 目前 BLOCKED（缺 cmd/migrate，I1）。
+   本地（scratch 克隆，加入 I1 提案）：45 PASS / 1 BLOCKED（S29m，I8），包括 first/upgrade/app-rollback 全部路径。
++  2026-09-28 评审 P1 修复：deploy.sh 把部署的 tag 写回 compose.env（§3–§5，smoke S43、看门狗 W10）；
++  超级用户口令轮换改为 `pg-ops.sh rotate-superuser`（§7，smoke S41）。
+ Change rules: 命令必须与脚本保持一致；改脚本行为时同步本文。
+ -->
+ # 部署运行手册（live-commerce）
+@@ -45,7 +47,9 @@ Change rules: 命令必须与脚本保持一致；改脚本行为时同步本文
+ 
+ 1. 编辑 `/etc/live-commerce/compose.env`：
+    - 四个域名：`LC_ADMIN_HOST`、`LC_STORE_HOST`、`LC_API_HOST`、`LC_HOOKS_HOST`。
+-   - `IMAGE_TAG`、`COMPOSE_PROFILES`。
++   - `COMPOSE_PROFILES`。
++   - `IMAGE_TAG` **不要手工改**：`deploy.sh first|upgrade|app-rollback` 在 `up -d` 之前把要启动的 tag 原子写入这里（临时文件 + 改名，保留属主和权限）。
++     所有其他 Compose 入口（`dc up`、`dc run migrate`、重跑 `first`、§8 换域名）都从这个文件取 tag，所以它必须始终等于正在运行的 tag。
+    - 共享开关：`LC_IDENTITY_ENABLED`、`LC_OIDC_ISSUER`、`LC_BUYER_*`。
+    跨服务的值**只能**写在这里。
+ 2. 编辑 `/etc/live-commerce/env/*.env`。这些文件只放各服务自己的旋钮；compose.yml 里 `environment:` 已接好的变量不得重复定义（preflight P06 会拦截）：
+@@ -67,9 +71,10 @@ Change rules: 命令必须与脚本保持一致；改脚本行为时同步本文
+ ## 3. 首次部署
+ 
+ ```sh
+-deploy/scripts/build-images.sh           # 输出 IMAGE_TAG=<sha12>，写入 compose.env（-dirty 标签禁止用于生产）
+-deploy/scripts/deploy.sh first           # preflight → 镜像检查 → postgres 健康 → migrate → provision-logins → up -d → 部署后检查 → 记录
++deploy/scripts/build-images.sh           # 输出 IMAGE_TAG=<sha12>（-dirty 标签禁止用于生产）
++deploy/scripts/deploy.sh first <sha12>   # preflight → 镜像检查 → postgres 健康 → migrate → provision-logins → 写 compose.env IMAGE_TAG → up -d → 部署后检查 → 记录
+ ```
++- 不带 `<tag>` 时使用 compose.env 里已有的 `IMAGE_TAG`。
+ - 首次签发 ACME 证书：DNS 必须先指向本机（P14）。演练时在 `caddy.env` 中打开 staging CA，正式签发前再注释掉。
+ - OIDC 回调地址：`https://<LC_ADMIN_HOST>/api/auth/callback`（`cmd/api/identity.go:59`），需要在 IdP 注册。
+ - 部署后检查（脚本会自动执行）：
+@@ -94,8 +99,11 @@ deploy/scripts/deploy.sh upgrade <tag>
+ 3. 停止 api/admin/storefront/workers。这段时间 Caddy 返回 503 + `Retry-After: 60`，即维护窗口。
+ 4. 用新镜像运行 migrate。先执行业务 SQL，再执行 River，最后执行 post_river，全部在同一个 advisory lock 下完成。
+ 5. 运行 provision-logins。
+-6. `up -d`。
+-7. 部署后检查并写入日志。
++6. 把新 tag 写入 compose.env 的 `IMAGE_TAG`（日志：`compose.env IMAGE_TAG <旧> -> <新>`）。
++   时机是 `up -d` 之前、迁移成功之后：从这一刻起容器运行新 tag，所以即使部署后检查失败，compose.env 也和实际运行的镜像一致，
++   之后任何普通的 `dc up -d` 都不会悄悄换回旧镜像（旧镜像跑在已迁移的 schema 上，旧 migrate 还会报 `database migration unknown to this binary`）。
++7. `up -d`。
++8. 部署后检查；通过后才写入 `deployments.log`（它只记录验证通过的部署，是回滚判断的依据）。
+ 
+ 要点：
+ - 迁移失败时修复代码后重新执行。**绝不修改已经应用的 SQL 或 checksum**。
+@@ -105,8 +113,10 @@ deploy/scripts/deploy.sh upgrade <tag>
+ ## 5. 回滚决策树
+ 
+ 1. **与该 tag 上次部署时相比，ledger 行数没有变化** → `deploy/scripts/deploy.sh app-rollback <旧tag>`。
+-   如果 ledger 有变化，脚本会拒绝，并提示 "forward-fix only"。
+-   回滚到正在运行的 tag 是空操作，会通过部署后检查。smoke S39 覆盖四条路径：空操作、换 tag（容器重建）、换回原 tag、ledger 变化时拒绝。
++   如果 ledger 有变化，脚本会拒绝，并提示 "forward-fix only"（此时 compose.env 不会被改动）。
++   允许回滚时，脚本同样在 `up -d` 之前把 `<旧tag>` 写入 compose.env，否则之后的 `dc up` 会把坏版本装回来。
++   回滚到正在运行的 tag 是空操作，会通过部署后检查。smoke S39 覆盖四条路径：空操作、换 tag（容器重建）、换回原 tag、ledger 变化时拒绝；
++   S43 验证 compose.env 跟随回滚、普通 `up -d` 不改变 tag、看门狗 W10 能发现漂移。
+ 2. ledger 已变化，**且**备份之后**没有任何外部业务事实**（恢复流量后没有新订单或支付）→ 由 owner 决定是否按 backup-restore.md 恢复数据库，再做 app-rollback。
+ 3. 其他情况 → **前向修复 + 对账**（架构.md §22.1）。**禁止在真实支付之上恢复数据库**。
+ - 应用回滚不等于数据库回滚。脚本永远不会自动回滚或自动恢复。
+@@ -124,7 +134,7 @@ deploy/scripts/deploy.sh upgrade <tag>
+ | 密钥 | 做法 |
+ |---|---|
+ | `pw_<login>` | 写入新值（`openssl rand -hex 32`，不带换行）→ `secrets-init.sh --rederive` → `docker compose run --rm -T --no-deps provision-logins` → 重启该服务 |
+-| `pg_superuser_password` | 在 pg-ops 中执行 `ALTER ROLE postgres PASSWORD ...`（先写临时文件，禁止放进 argv）→ 替换文件 → `--rederive` 更新 `dsn_migrate_owner` |
++| `pg_superuser_password` | **只用** `deploy/scripts/pg-ops.sh rotate-superuser`（见下文）。**禁止**手工执行 `ALTER ROLE postgres PASSWORD ...`：服务器 `log_statement='ddl'`，新口令会以明文进入 postgres 日志（Docker json-file）和诊断包 |
+ | `commerce_bff_key` | 替换后 api 和 admin **同时**重启 |
+ | `commerce_buyer_bff_key` | 替换后 api 和 storefront 同时重启（值必须不同于商家 BFF key） |
+ | `commerce_buyer_cookie_key` | 替换后所有买家会话失效 |
+@@ -133,11 +143,24 @@ deploy/scripts/deploy.sh upgrade <tag>
+ 
+ 所有密钥文件权限保持 `0440 root:10500`。改完后执行 `preflight.sh`。
+ 
++`pg-ops.sh rotate-superuser`（在 DB 主机上以 root 执行，postgres 必须在运行；smoke S41 验证）：
++1. 生成新值（`openssl rand -hex 32`），先持久化到 `secrets/.pg_superuser_password.rotating`（0400），再改数据库。
++2. 在 pg-ops 中用**同一个 psql 会话**：`SET log_statement='none'; SET log_min_error_statement='panic'; SET log_min_duration_statement=-1;`，
++   psql 自己读取新值（`` \set pw `cat …` ``，新值经 stdin 进入 pg-ops 的 /tmp tmpfs），`SELECT format('ALTER ROLE postgres PASSWORD %L', :'pw') \gexec`。
++   然后验证新口令能登录、旧口令被拒绝。做法与 provision-logins.sh 相同（`deploy/postgres/ops/rotate-superuser.sh`）。
++3. **原地**写入 `pg_superuser_password`（同一个 inode，属主和权限不变）：Compose 把文件密钥按单文件 bind mount 挂载，
++   原地写入后正在运行的 postgres 容器立即看到新值（`lc_psql`、看门狗、deploy.sh 都依赖它）；改名替换会让容器一直看到旧值，直到重启。
++4. `secrets-init.sh --rederive` 更新 `dsn_migrate_owner`。
++5. 验证 `lc_psql` 可用，并对 `docker compose logs postgres` 做 `lc_secret_scan`，命中即失败。
++- 中途失败：`.pg_superuser_password.rotating` 会保留，**重新执行同一命令即可继续**（若新值已生效则跳过 ALTER）。不要删除这个文件。
++- 完成后更新离线加密的密钥副本（backup-restore.md §7）。PITR 不受影响：临时集群用 peer 认证，`--promote` 会把超级用户口令设为当前值。
++
+ ## 8. 证书与域名
+ 
+ - Caddy 自动申请和续期证书，数据在 `caddy-data` 卷（/data），需要随主机备份。
+ - 看门狗 W5 在证书剩余不足 14 天时告警。
+-- 更换域名的步骤：改 compose.env → preflight --online → `docker compose up -d caddy api admin`。origin 由域名推导。
++- 更换域名的步骤：改 compose.env → preflight --online → `dc up -d caddy api admin`（`dc` 见 incident.md 开头）。origin 由域名推导。
++  compose.env 的 `IMAGE_TAG` 由 deploy.sh 维护，等于正在运行的 tag，所以这一步不会换镜像；执行前可用 `watchdog.sh` 的 W10 确认没有漂移。
+ 
+ ## 9. 迁移到两台主机 / Kubernetes
+ 
+diff --git a/docs/runbooks/incident.md b/docs/runbooks/incident.md
+index 985034e..1627b4a 100644
+--- a/docs/runbooks/incident.md
++++ b/docs/runbooks/incident.md
+@@ -14,12 +14,14 @@ Change rules: 新增服务或新日志标记时同步 §1 表格。
+ ```sh
+ dc() { docker compose --project-directory /opt/live-commerce/deploy --env-file /etc/live-commerce/compose.env -f /opt/live-commerce/deploy/compose.yml "$@"; }
+ ```
++`dc` 从 compose.env 读取 `IMAGE_TAG`。deploy.sh 在每次 `up -d` 之前把要运行的 tag 写进去，所以 `dc up`/`dc run migrate` 使用的就是当前部署的镜像。
++**不要在 shell 里 `export IMAGE_TAG=…`**（环境变量优先于文件），也不要手工改这一行；看门狗 W10 会报告容器 tag 与文件不一致。
+ 
+ ## 1. 日志在哪里
+ 
+ | 服务 | 命令 | 内容 | 就绪/错误标记 |
+ |---|---|---|---|
+-| caddy | `dc logs --since 30m caddy` | JSON 访问日志和运行日志（含客户端 IP） | ACME 错误、`dial tcp 127.0.0.1:...` 表示上游挂掉 |
++| caddy | `dc logs --since 30m caddy` | JSON 访问日志和运行日志（含客户端 IP）。URI、Referer、Location 中的 `hub.verify_token`、`code`、`state`、`token`、`access_token`、`id_token` 记为 `REDACTED`（smoke S40） | ACME 错误、`dial tcp 127.0.0.1:...` 表示上游挂掉 |
+ | api | `dc logs --since 30m api` | slog 文本 | 启动失败**只会**打印 `api stopped`（设计如此，见 §3 api） |
+ | admin / storefront | `dc logs admin` / `dc logs storefront` | Next 服务日志 | 模块加载阶段的配置错误，例如 `missing COMMERCE_BFF_KEY`、`invalid keys` |
+ | expiry-worker | `dc logs expiry-worker` | slog | 正常：`expiry_worker_ready`；异常：`*_invalid_config`、`*_database*`、`*_start_failed` |
+@@ -34,7 +36,10 @@ dc() { docker compose --project-directory /opt/live-commerce/deploy --env-file /
+ 
+ ## 2. 分诊流程
+ 
+-1. 看看门狗：`deploy/scripts/watchdog.sh`。它会输出 W1–W9 的 PASS/FAIL，可以快速定位问题类别。
++1. 看看门狗：`deploy/scripts/watchdog.sh`。它会输出 W1–W10 的 PASS/FAIL，可以快速定位问题类别。
++   - W10（镜像 tag 漂移）：某个 `lc-*` 容器运行的 tag 与 compose.env 的 `IMAGE_TAG` 不同，说明有人绕过 deploy.sh 起了容器，
++     或者部署中途失败。**不要**直接 `dc up -d`（它会按文件里的 tag 重建容器）：先看 `deployments.log` 最后一行和 `dc ps`，
++     再按 deploy.md §5 用 `deploy.sh upgrade|app-rollback <tag>` 收敛。
+ 2. `dc ps`：查看状态、健康状况和重启次数。
+ 3. 健康检查：`curl -fsS https://<api>/healthz`；`docker inspect -f '{{.State.Health.Status}}' <容器>`。
+ 4. 查看对应服务的日志（§1）。
+@@ -83,6 +88,8 @@ dc() { docker compose --project-directory /opt/live-commerce/deploy --env-file /
+ - 磁盘满（W2）：先清理 Docker 镜像和日志。**不要删除 `wal/`**，它由 basebackup 负责清理。
+ - 归档失败（W4）：检查 `${LC_BACKUP_DIR}/wal` 的权限（`0700 999:999`）和剩余空间；`dc logs postgres | grep archive`。
+   已存在的同名同内容段会被视为成功；**不同内容的同名段**会持续失败，需要人工比对。
++  PITR 切换后出现这种情况，说明数据目录不是用 `restore-pitr --promote` + `pitr-cutover` 放进来的（backup-restore.md §6）：
++  `SELECT timeline_id FROM pg_control_checkpoint()` 应大于 1。
+ - 连接数过高（W9）：执行 `SELECT application_name, state, count(*) FROM pg_stat_activity GROUP BY 1,2`，看是哪个服务的连接池过大。
+ - 长事务（W7）：找到对应的 `application_name`。只能在确认影响后，经批准再执行 `pg_terminate_backend`。
+ 
+@@ -112,7 +119,7 @@ dc() { docker compose --project-directory /opt/live-commerce/deploy --env-file /
+ |---|---|
+ | `commerce_account_keys_json` 或 replay key 泄露（涉及真实资金） | 立即 `dc stop payment-worker-live`，通知 owner，按 deploy.md §7 轮换（追加新 key），评估商户 PSP 凭据是否需要在 PAYUNi 侧重置 |
+ | BFF key 泄露 | 轮换这一对 key（api + admin 或 api + storefront），同时重启 |
+-| 数据库口令泄露 | 轮换对应的 `pw_<login>`，执行 `--rederive`，重跑 provision 并重启相关服务 |
++| 数据库口令泄露 | 轮换对应的 `pw_<login>`，执行 `--rederive`，重跑 provision 并重启相关服务；超级用户口令用 `deploy/scripts/pg-ops.sh rotate-superuser`（deploy.md §7，**禁止**手工 `ALTER ROLE`：`log_statement='ddl'` 会把新口令写进日志） |
+ | 诊断包、日志或备份外泄 | 视为 PII 事件，通知 owner（O8） |
+ 
+ ## 6. 升级规则与禁止事项
+-- 
+2.43.0
+

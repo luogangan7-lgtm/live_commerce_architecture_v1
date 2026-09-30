@@ -1,0 +1,28 @@
+# RED proof SP12 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: apply_stripe_observation no longer compares AmountSubtotal with AmountTotal (rule 3)
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP12MoneyChecks$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_flow_test.go:1132: timeout waiting for PROVIDER_AMOUNT_MISMATCH review: op state=UNKNOWN generation=4 last codes=[stripe_terminal_observed reconcile_claimed stripe_report_observed reconcile_claimed] fake requests=39
+--- FAIL: TestStripeSP12MoneyChecks (125.83s)
+    --- PASS: TestStripeSP12MoneyChecks/amount_mismatch_amount_total_records_review_not_a_fact (6.82s)
+    --- PASS: TestStripeSP12MoneyChecks/amount_mismatch_currency_records_review_not_a_fact (6.28s)
+    --- FAIL: TestStripeSP12MoneyChecks/amount_mismatch_subtotal_records_review_not_a_fact (30.90s)
+    --- PASS: TestStripeSP12MoneyChecks/amount_mismatch_discount_records_review_not_a_fact (5.95s)
+    --- PASS: TestStripeSP12MoneyChecks/amount_mismatch_tax_records_review_not_a_fact (6.18s)
+    --- PASS: TestStripeSP12MoneyChecks/amount_mismatch_shipping_records_review_not_a_fact (6.37s)
+    --- PASS: TestStripeSP12MoneyChecks/amount_mismatch_payment_intent_amount_records_review_not_a_fact (6.08s)
+    --- PASS: TestStripeSP12MoneyChecks/amount_mismatch_payment_intent_currency_records_review_not_a_fact (6.38s)
+    --- PASS: TestStripeSP12MoneyChecks/presentment_drift_presentment_currency_captures_with_review_work_and_no_allocation (6.03s)
+    --- PASS: TestStripeSP12MoneyChecks/presentment_drift_presentment_amount_captures_with_review_work_and_no_allocation (6.38s)
+    --- PASS: TestStripeSP12MoneyChecks/presentment_drift_legacy_currency_conversion_captures_with_review_work_and_no_allocation (6.52s)
+    --- PASS: TestStripeSP12MoneyChecks/identity_mismatch_is_not_recorded (5.87s)
+    --- PASS: TestStripeSP12MoneyChecks/duplicate_session_reviews_never_captures_or_closes (1.20s)
+    --- PASS: TestStripeSP12MoneyChecks/no_payment_required_is_conflicting_report (6.22s)
+    --- PASS: TestStripeSP12MoneyChecks/webhook_is_a_wake_up_never_financial_authority (1.30s)
+    --- PASS: TestStripeSP12MoneyChecks/complete_unpaid_escalates_after_60_minutes (7.16s)
+    --- PASS: TestStripeSP12MoneyChecks/late_paid_after_closure_is_one_manual_refund_obligation_and_replay_converges (6.91s)
+FAIL
+FAIL	livecommerce/tests/foundation	126.342s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

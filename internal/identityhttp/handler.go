@@ -1,5 +1,11 @@
-// Package identityhttp exposes the trusted identity service only to the local
-// BFF. Cookie/Origin/CSRF handling belongs to Next, not to business API handlers.
+// Package identityhttp owns the trusted identity HTTP surface (/v1/identity/*) that only the local
+// BFF may call, authenticated by a fixed BFF key: OIDC login start and complete, first store
+// bootstrap and logout (handler.go), and the merchant password routes /v1/identity/password/*
+// (password.go, contracts/merchant-password-auth-v1.md §7.1).
+//
+// It never handles cookies, Origin or CSRF (those belong to Next), never issues a business API
+// token, never lets the business runtime pool sign in, and never trusts X-Commerce-Client-IP before
+// the BFF-key check: it wraps internal/identity only.
 package identityhttp
 
 import (

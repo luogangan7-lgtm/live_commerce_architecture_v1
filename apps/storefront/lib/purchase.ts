@@ -4,7 +4,21 @@ import {
   readBuyerSession,
   definiteError,
 } from "./buyer-client.ts";
+import {
+  isCollectionState,
+  isCvsKind,
+  isPaymentMode,
+  validBuyerCvsShipment,
+  type BuyerCvsShipment,
+  type CollectionState,
+  type CvsKind,
+  type PaymentMode,
+} from "./cvs-contract.ts";
 
+// Buyer purchase transport + strict validators for the BFF /api/buyer/* routes (cart, catalog,
+// checkout-options, quotes, destination, checkout, orders). Owns: request journals/CAS and the exact wire shapes.
+// It never decides money or eligibility (Go does). CVS additions follow contracts/taiwan-cvs-logistics-v1.md
+// §5 and §16 (options rows, CVS destinations by pickup_id, Begin payment_mode, order CVS projection).
 export type Item = { sku_id: string; quantity: number };
 export type Cart = {
   id: string;
@@ -34,8 +48,29 @@ export type Option = {
   name_hant: string;
   name_en: string;
   sort_order: number;
+  // CVS rows only (taiwan-cvs-logistics-v1 §5.1): how the store is chosen and which payment modes exist.
+  pickup_selection?: "ecpay_map" | "buyer_entered";
+  payment_modes?: PaymentMode[];
+  store_search_url?: string;
 };
-export const optionKey = (value: Option) =>
+// A configured chain that cannot be sold yet (ECPay chain gate, §5.1): listed but disabled ("Coming soon").
+// Go sends only the identity/label fields plus available:false and a reason; versions are not needed.
+export type UnavailableOption = Pick<
+  Option,
+  | "market_id"
+  | "country"
+  | "currency"
+  | "method"
+  | "delivery_kind"
+  | "name_hans"
+  | "name_hant"
+  | "name_en"
+  | "sort_order"
+> & { available: false; reason: "coming_soon" | "temporarily_unavailable" };
+export type OptionRow = Option | UnavailableOption;
+export const isUnavailable = (o: OptionRow): o is UnavailableOption =>
+  (o as UnavailableOption).available === false;
+export const optionKey = (value: Pick<Option, "market_id" | "country" | "method">) =>
   `${value.market_id}:${value.country}:${value.method}`;
 export async function assertPurchaseContext(context: string) {
   const current = await readBuyerSession();
@@ -88,24 +123,30 @@ export type HomeAddress = {
   line1: string;
   line2: string;
 };
+export type DestinationKind = "home" | CvsKind;
 type DestinationMarker = {
   expected_version: number;
   cart_version: number;
-  kind: "home";
+  kind: DestinationKind;
   country: string;
 };
+// CVS destinations (§16.1/§5.2) carry the pickup_id from a verified map selection or a buyer-entered store,
+// TW only, and an all-empty home_address; home destinations carry no pickup_id (Go validDestinationInput).
 export type DestinationWrite = DestinationMarker & {
   recipient_name: string;
   phone: string;
   home_address: HomeAddress;
+  pickup_id?: string;
 };
 type DestinationDetails = {
-  kind: "home" | "cvs_711" | "cvs_familymart";
+  kind: DestinationKind;
   country: string;
   recipient_name: string;
   phone: string;
   home_address: HomeAddress;
   pickup?: {
+    id?: string;
+    verification_kind?: string;
     kind: string;
     namespace: string;
     code: string;
@@ -128,6 +169,29 @@ export type CheckoutWrite = {
   cart_version: number;
   service_version: number;
   allocation_version: number;
+  // Only set for CVS options (§16.2); a home checkout body is unchanged and Go reads a missing mode as card.
+  payment_mode?: PaymentMode;
+};
+// manual-fulfilment-v1 §3.1 carrier codes; a label, never an integration binding.
+export const CARRIER_CODES = [
+  "seven_eleven_cvs",
+  "familymart_cvs",
+  "hilife_cvs",
+  "okmart_cvs",
+  "sf_express",
+  "chunghwa_post",
+  "other",
+] as const;
+export type CarrierCode = (typeof CARRIER_CODES)[number];
+// Buyer shipment (manual-fulfilment-v1 §5.2): the seller's attestation of dispatch, never
+// in-transit or delivered evidence. Mirrors internal/checkout.BuyerShipment.
+export type Shipment = {
+  status: "SHIPPED";
+  carrier_code: CarrierCode;
+  carrier_name: string | null;
+  tracking_number: string;
+  tracking_url: string | null;
+  recorded_at: string;
 };
 export type Order = {
   order_id: string;
@@ -135,7 +199,18 @@ export type Order = {
   cart_version: number;
   commercial_state: "DRAFT" | "AWAITING_PAYMENT" | "CONFIRMED" | "CANCELLED";
   fulfillment_state:
-    "MANUAL_UNASSIGNED" | "CANCELLED" | "PAID_ALLOCATION_FAILED";
+    | "MANUAL_UNASSIGNED"
+    | "CANCELLED"
+    | "PAID_ALLOCATION_FAILED"
+    | "MERCHANT_SHIPPED"
+    | "PROVIDER_LABEL_CREATED";
+  // Go always emits it (null unless the head is SHIPPED); absent is read as null.
+  shipment?: Shipment | null;
+  // taiwan-cvs-logistics-v1 §16.2/§5.3: Go always emits all three; absent reads as card / null / null so
+  // an order from before the CVS release still validates. pay_at_pickup <=> collection_state != null.
+  payment_mode?: PaymentMode;
+  collection_state?: CollectionState | null;
+  cvs_shipment?: BuyerCvsShipment | null;
   hold_expires_at?: string;
   snapshot: {
     quote: Pick<Quote, "currency" | "lines" | "amount">;
@@ -204,8 +279,29 @@ export const validProduct = (v: unknown): v is Product =>
   [v.name, v.description, v.sku_code].every((x) => typeof x === "string") &&
   currency(v.currency) &&
   integer(v.price_minor, 0, MAX_AMOUNT);
+const HOME_AND_CVS = ["home", "cvs_711", "cvs_familymart", "cvs_hilife", "cvs_okmart"];
+const optionLabels = (v: Record<string, unknown>) =>
+  [v.name_hans, v.name_hant, v.name_en].every((x) => typeof x === "string") &&
+  integer(v.sort_order, -2147483648, 2147483647);
+// CVS-only fields (§5.1). Home rows carry none of them. store_search_url is informational: the UI links its
+// own constants (cvs-contract.ts CVS_SEARCH_LINKS), never a server-supplied href.
+const validCvsOptionFields = (v: Record<string, unknown>) =>
+  (v.pickup_selection === "ecpay_map" || v.pickup_selection === "buyer_entered") &&
+  Array.isArray(v.payment_modes) &&
+  v.payment_modes.length >= 1 &&
+  v.payment_modes.length <= 2 &&
+  v.payment_modes.every(isPaymentMode) &&
+  new Set(v.payment_modes).size === v.payment_modes.length &&
+  v.payment_modes.includes("card") &&
+  (v.pickup_selection === "buyer_entered"
+    ? typeof v.store_search_url === "string" &&
+      v.store_search_url.startsWith("https://") &&
+      v.store_search_url.length <= 512
+    : v.store_search_url === undefined);
 export const validOption = (v: unknown): v is Option =>
   record(v) &&
+  (v.available === undefined || v.available === true) &&
+  v.reason === undefined &&
   id(v.market_id) &&
   currency(v.currency) &&
   country(v.country) &&
@@ -213,9 +309,26 @@ export const validOption = (v: unknown): v is Option =>
   integer(v.service_version, 1) &&
   integer(v.allocation_version, 1) &&
   ["MANUAL", "API"].includes(String(v.mode)) &&
-  ["home", "cvs_711", "cvs_familymart"].includes(String(v.delivery_kind)) &&
-  [v.name_hans, v.name_hant, v.name_en].every((x) => typeof x === "string") &&
-  integer(v.sort_order, -2147483648, 2147483647);
+  HOME_AND_CVS.includes(String(v.delivery_kind)) &&
+  optionLabels(v) &&
+  (v.delivery_kind === "home"
+    ? v.pickup_selection === undefined &&
+      v.payment_modes === undefined &&
+      v.store_search_url === undefined
+    : country(v.country) && v.country === "TW" && validCvsOptionFields(v));
+// {available:false, reason} rows keep only identity + labels (a chain the store configured but ECPay gates).
+const validUnavailableOption = (v: unknown): v is UnavailableOption =>
+  record(v) &&
+  v.available === false &&
+  (v.reason === "coming_soon" || v.reason === "temporarily_unavailable") &&
+  id(v.market_id) &&
+  currency(v.currency) &&
+  country(v.country) &&
+  deliveryMethod(v.method) &&
+  isCvsKind(v.delivery_kind) &&
+  optionLabels(v);
+export const validOptionRow = (v: unknown): v is OptionRow =>
+  validOption(v) || validUnavailableOption(v);
 const validQuoteSummary = (v: unknown): v is Order["snapshot"]["quote"] =>
   record(v) &&
   currency(v.currency) &&
@@ -260,7 +373,7 @@ export const validQuote = (v: unknown): v is Quote =>
 // address form writes only home destinations. Validate it, do not auto-confirm.
 const validDestinationDetails = (v: unknown): v is DestinationDetails =>
   record(v) &&
-  ["home", "cvs_711", "cvs_familymart"].includes(String(v.kind)) &&
+  HOME_AND_CVS.includes(String(v.kind)) &&
   country(v.country) &&
   typeof v.recipient_name === "string" &&
   typeof v.phone === "string" &&
@@ -283,6 +396,90 @@ export const validDestination = (v: unknown): v is Destination =>
   timestamp(v.selected_at) &&
   timestamp(v.expires_at) &&
   validDestinationDetails(v);
+const FULFILLMENT_STATES = [
+  "MANUAL_UNASSIGNED",
+  "CANCELLED",
+  "PAID_ALLOCATION_FAILED",
+  "MERCHANT_SHIPPED",
+  // taiwan-cvs-logistics-v1 §6: an ECPay label exists (order stays confirmed, never "delivered").
+  "PROVIDER_LABEL_CREATED",
+];
+// The link is rendered as an href, so it is checked at this trust boundary exactly like Go's
+// canonical rule (§3.2): https, dotted host, no userinfo/port/fragment/whitespace, <=512 bytes.
+export function validTrackingURL(v: unknown): v is string {
+  if (
+    typeof v !== "string" ||
+    !v.startsWith("https://") ||
+    new TextEncoder().encode(v).length > 512 ||
+    /[\s\u0000-\u001f\u007f-\u009f#]/u.test(v)
+  )
+    return false;
+  try {
+    const u = new URL(v);
+    return (
+      u.protocol === "https:" &&
+      u.username === "" &&
+      u.password === "" &&
+      u.port === "" &&
+      u.hash === "" &&
+      u.hostname.includes(".")
+    );
+  } catch {
+    return false;
+  }
+}
+// MERCHANT_SHIPPED <=> a SHIPPED head (Go rejects any disagreement as drift).
+const validShipment = (v: unknown, state: unknown): boolean => {
+  if (v === undefined || v === null) return state !== "MERCHANT_SHIPPED";
+  if (state !== "MERCHANT_SHIPPED") return false;
+  if (
+    !record(v) ||
+    !exact(v, [
+      "status",
+      "carrier_code",
+      "carrier_name",
+      "tracking_number",
+      "tracking_url",
+      "recorded_at",
+    ]) ||
+    v.status !== "SHIPPED" ||
+    !(CARRIER_CODES as readonly string[]).includes(String(v.carrier_code)) ||
+    !timestamp(v.recorded_at)
+  )
+    return false;
+  const name = v.carrier_name;
+  if (
+    name === null
+      ? v.carrier_code === "other"
+      : typeof name !== "string" ||
+        [...name].length < 1 ||
+        [...name].length > 80 ||
+        /\p{Cc}/u.test(name)
+  )
+    return false;
+  return (
+    typeof v.tracking_number === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9 -]{0,63}$/.test(v.tracking_number) &&
+    !v.tracking_number.endsWith(" ") &&
+    (v.tracking_url === null || validTrackingURL(v.tracking_url))
+  );
+};
+// §16.2: payment_mode pay_at_pickup <=> collection_state set (schema CHECK). §5.3: cvs_shipment only for a
+// CVS destination. Absent keys read as card / null / null (an order written before the CVS release).
+function validOrderCvs(v: Record<string, unknown>): boolean {
+  const mode = v.payment_mode ?? "card";
+  const collection = v.collection_state ?? null;
+  const shipment = v.cvs_shipment ?? null;
+  if (!isPaymentMode(mode)) return false;
+  if (!(collection === null || isCollectionState(collection))) return false;
+  if ((mode === "pay_at_pickup") !== (collection !== null)) return false;
+  if (shipment !== null && !validBuyerCvsShipment(shipment)) return false;
+  const kind =
+    record(v.snapshot) && record(v.snapshot.destination)
+      ? v.snapshot.destination.kind
+      : undefined;
+  return shipment === null || (isCvsKind(kind) && shipment.chain === kind);
+}
 export const validOrder = (v: unknown): v is Order =>
   record(v) &&
   id(v.order_id) &&
@@ -291,9 +488,9 @@ export const validOrder = (v: unknown): v is Order =>
   ["DRAFT", "AWAITING_PAYMENT", "CONFIRMED", "CANCELLED"].includes(
     String(v.commercial_state),
   ) &&
-  ["MANUAL_UNASSIGNED", "CANCELLED", "PAID_ALLOCATION_FAILED"].includes(
-    String(v.fulfillment_state),
-  ) &&
+  FULFILLMENT_STATES.includes(String(v.fulfillment_state)) &&
+  validShipment(v.shipment, v.fulfillment_state) &&
+  validOrderCvs(v) &&
   (v.commercial_state === "DRAFT"
     ? timestamp(v.hold_expires_at)
     : v.hold_expires_at === undefined) &&
@@ -325,9 +522,7 @@ export const validOrderSummary = (v: unknown): v is OrderSummary =>
   ["DRAFT", "AWAITING_PAYMENT", "CONFIRMED", "CANCELLED"].includes(
     String(v.commercial_state),
   ) &&
-  ["MANUAL_UNASSIGNED", "CANCELLED", "PAID_ALLOCATION_FAILED"].includes(
-    String(v.fulfillment_state),
-  ) &&
+  FULFILLMENT_STATES.includes(String(v.fulfillment_state)) &&
   timestamp(v.created_at) &&
   typeof v.currency === "string" &&
   /^[A-Z]{3}$/.test(v.currency) &&
@@ -337,7 +532,7 @@ const validDestinationMarker = (v: unknown): v is DestinationMarker =>
   exact(v, ["expected_version", "cart_version", "kind", "country"]) &&
   integer(v.expected_version, 0, Number.MAX_SAFE_INTEGER - 1) &&
   integer(v.cart_version, 1) &&
-  v.kind === "home" &&
+  (v.kind === "home" || isCvsKind(v.kind)) &&
   country(v.country);
 const destinationMarker = (v: DestinationWrite): DestinationMarker => ({
   expected_version: v.expected_version,
@@ -357,17 +552,18 @@ const destinationText = (
   [...v].length <= max &&
   (!required || v.length > 0) &&
   /^[\p{L}\p{M}\p{N}\p{P}\p{S}\x20]*$/u.test(v);
+const HOME_KEYS = [
+  "expected_version",
+  "cart_version",
+  "kind",
+  "country",
+  "recipient_name",
+  "phone",
+  "home_address",
+];
 export const validDestinationWrite = (v: unknown): v is DestinationWrite =>
   record(v) &&
-  exact(v, [
-    "expected_version",
-    "cart_version",
-    "kind",
-    "country",
-    "recipient_name",
-    "phone",
-    "home_address",
-  ]) &&
+  exact(v, v.kind === "home" ? HOME_KEYS : [...HOME_KEYS, "pickup_id"]) &&
   validDestinationMarker(destinationMarker(v as DestinationWrite)) &&
   destinationText(v.recipient_name, 120, true) &&
   typeof v.phone === "string" &&
@@ -376,11 +572,16 @@ export const validDestinationWrite = (v: unknown): v is DestinationWrite =>
   /^[0-9]{6,20}$/.test(v.phone.replace(/\D/g, "")) &&
   record(v.home_address) &&
   exact(v.home_address, ["region", "city", "postal_code", "line1", "line2"]) &&
-  destinationText(v.home_address.region, 100) &&
-  destinationText(v.home_address.city, 100, true) &&
-  destinationText(v.home_address.postal_code, 20) &&
-  destinationText(v.home_address.line1, 200, true) &&
-  destinationText(v.home_address.line2, 200);
+  (v.kind === "home"
+    ? destinationText(v.home_address.region, 100) &&
+      destinationText(v.home_address.city, 100, true) &&
+      destinationText(v.home_address.postal_code, 20) &&
+      destinationText(v.home_address.line1, 200, true) &&
+      destinationText(v.home_address.line2, 200)
+    : // CVS: TW only, a pickup_id from a verified selection / buyer-entered store, no home address (Go rule).
+      v.country === "TW" &&
+      id(v.pickup_id) &&
+      Object.values(v.home_address).every((x) => x === ""));
 const validCheckoutWrite = (v: unknown): v is CheckoutWrite =>
   record(v) &&
   exact(v, [
@@ -389,7 +590,9 @@ const validCheckoutWrite = (v: unknown): v is CheckoutWrite =>
     "cart_version",
     "service_version",
     "allocation_version",
+    ...(v.payment_mode === undefined ? [] : ["payment_mode"]),
   ]) &&
+  (v.payment_mode === undefined || isPaymentMode(v.payment_mode)) &&
   id(v.quote_id) &&
   id(v.destination_id) &&
   integer(v.cart_version, 1) &&
@@ -402,7 +605,9 @@ export function checkoutInput(
   cart: Cart,
   destination: Destination,
   now = Date.now(),
+  paymentMode?: PaymentMode,
 ): CheckoutWrite {
+  const cvs = option.delivery_kind !== "home";
   if (
     !validQuote(quote) ||
     !validOption(option) ||
@@ -415,9 +620,14 @@ export function checkoutInput(
     quote.method !== option.method ||
     quote.currency !== option.currency ||
     quote.currency !== cart.currency ||
-    option.mode !== "MANUAL" ||
-    option.delivery_kind !== "home" ||
-    destination.kind !== "home" ||
+    // Home stays MANUAL-only; a CVS row may be MANUAL (buyer_entered) or API (ecpay_map), Go re-checks.
+    (!cvs && option.mode !== "MANUAL") ||
+    destination.kind !== option.delivery_kind ||
+    (cvs && destination.pickup?.kind !== option.delivery_kind) ||
+    // payment_mode belongs to CVS rows only and must be one the row offers (§16.2, §5.1).
+    (cvs
+      ? !(option.payment_modes ?? []).includes(paymentMode ?? "card")
+      : paymentMode !== undefined) ||
     destination.cart_id !== cart.id ||
     destination.cart_version !== cart.version ||
     destination.country !== quote.country ||
@@ -432,6 +642,7 @@ export function checkoutInput(
     cart_version: cart.version,
     service_version: option.service_version,
     allocation_version: option.allocation_version,
+    ...(cvs ? { payment_mode: paymentMode ?? "card" } : {}),
   };
 }
 
@@ -746,7 +957,11 @@ async function commandResponse(
       value.retryable === false
     ) {
       clearPending(pending);
-      throw new BuyerClientError("request_failed", response.status);
+      throw new BuyerClientError(
+        "request_failed",
+        response.status,
+        typeof value.code === "string" ? value.code : undefined,
+      );
     }
     throw new BuyerClientError("uncertain", response.status);
   }
@@ -826,6 +1041,8 @@ export async function writeDestination(
       current.version === body.expected_version + 1 &&
       current.recipient_name === body.recipient_name &&
       current.phone === body.phone &&
+      // CVS: the head must point at the pickup we submitted (Go returns it as pickup.id).
+      (body.pickup_id === undefined || current.pickup?.id === body.pickup_id) &&
       Object.keys(body.home_address).every(
         (k) =>
           current.home_address[k as keyof HomeAddress] ===
@@ -939,6 +1156,31 @@ export async function continueShopping(
   });
 }
 
+// Begin receipt {order_id, hold_expires_at} (+ payment_mode/commercial_state since taiwan-cvs §16.2). A
+// pay_at_pickup order is CONFIRMED at placement, so its receipt need not carry a hold time; a card order
+// must. When the request named a mode, an echoed mode must agree with it.
+function validCheckoutReceipt(
+  receipt: unknown,
+  requested?: PaymentMode,
+): receipt is { order_id: string } {
+  if (!record(receipt) || !id(receipt.order_id)) return false;
+  const mode = receipt.payment_mode;
+  if (mode !== undefined && (!isPaymentMode(mode) || mode !== (requested ?? "card")))
+    return false;
+  if (
+    receipt.commercial_state !== undefined &&
+    !["DRAFT", "AWAITING_PAYMENT", "CONFIRMED", "CANCELLED"].includes(
+      String(receipt.commercial_state),
+    )
+  )
+    return false;
+  return (
+    timestamp(receipt.hold_expires_at) ||
+    ((requested ?? "card") === "pay_at_pickup" &&
+      receipt.hold_expires_at === undefined)
+  );
+}
+
 export async function writeCheckout(
   context: string,
   input?: CheckoutWrite,
@@ -980,9 +1222,7 @@ export async function writeCheckout(
     );
     const receipt = await commandResponse(response, pending, recovering);
     if (
-      !record(receipt) ||
-      !id(receipt.order_id) ||
-      !timestamp(receipt.hold_expires_at) ||
+      !validCheckoutReceipt(receipt, pending.body.payment_mode) ||
       (existingID !== null && existingID !== receipt.order_id)
     )
       throw new BuyerClientError("uncertain");

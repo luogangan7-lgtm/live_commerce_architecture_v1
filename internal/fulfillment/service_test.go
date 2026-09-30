@@ -60,6 +60,26 @@ func TestValidServiceInput(t *testing.T) {
 	if !validServiceInput(draft) {
 		t.Fatal("valid disabled API draft was rejected")
 	}
+
+	// taiwan-cvs-logistics-v1 R-2: an ENABLED API service is valid only with a binding and a CVS kind (SQL then requires the
+	// binding to be the store's qualified, enabled ecpay_logistics profile); all four chains are service kinds.
+	for _, kind := range []string{"cvs_711", "cvs_familymart", "cvs_hilife", "cvs_okmart"} {
+		api := validInput()
+		api.DeliveryKind, api.Mode, api.BindingID, api.BindingVersion = kind, "API", testID, 1
+		if !validServiceInput(api) {
+			t.Fatalf("enabled API service of kind %s with a binding was rejected", kind)
+		}
+		manual := validInput()
+		manual.DeliveryKind = kind
+		if !validServiceInput(manual) {
+			t.Fatalf("manual service of kind %s was rejected", kind)
+		}
+	}
+	homeAPI := validInput()
+	homeAPI.Mode, homeAPI.BindingID, homeAPI.BindingVersion = "API", testID, 1
+	if validServiceInput(homeAPI) {
+		t.Fatal("enabled API home delivery accepted: only CVS kinds have an adapter")
+	}
 }
 
 func TestStopOnlyTransition(t *testing.T) {

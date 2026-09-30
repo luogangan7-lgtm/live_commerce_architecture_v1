@@ -1,4 +1,8 @@
-// Package pricing owns merchant market policy writes and the pure quote money calculation.
+// Package pricing owns merchant market policy writes (markets and their currency) and the pure quote
+// money calculation.
+//
+// It never reads a client-supplied amount, never touches stock or payment state, and never rounds
+// money outside Calculate.
 package pricing
 
 import (

@@ -40,7 +40,7 @@ func LoadWebhookEndpoints(getenv func(string) string) ([]WebhookEndpoint, error)
 	if len(raw) < 1 || len(raw) > 32768 {
 		return nil, ErrRuntimeConfig
 	}
-	root, err := parseStrict([]byte(raw))
+	root, err := ParseStrict([]byte(raw))
 	if err != nil || !exactFields(root, "apps") {
 		return nil, ErrRuntimeConfig
 	}
@@ -85,7 +85,7 @@ func LoadPayloadKeyring(getenv func(string) string) (*PayloadKeyring, error) {
 	if !validPayloadKeyID(activeID) || len(raw) < 1 || len(raw) > 8192 {
 		return nil, ErrRuntimeConfig
 	}
-	root, err := parseStrict([]byte(raw))
+	root, err := ParseStrict([]byte(raw))
 	if err != nil || !exactFields(root, "keys") {
 		return nil, ErrRuntimeConfig
 	}

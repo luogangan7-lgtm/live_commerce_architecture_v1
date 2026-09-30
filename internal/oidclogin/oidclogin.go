@@ -1,5 +1,10 @@
-// Package oidclogin verifies an external OIDC login without exposing provider
-// tokens or deriving application authorization from identity claims.
+// Package oidclogin owns verification of an external OIDC login (discovery, PKCE S256, one-use code,
+// ID-token signature and nonce) without exposing provider tokens.
+//
+// It never derives application authorization from identity claims (internal/identity maps a verified
+// issuer and subject to a principal), never stores a provider token, and never accepts a non-
+// loopback plain-HTTP issuer outside the explicit test switch. External host: the configured OIDC
+// issuer.
 package oidclogin
 
 import (

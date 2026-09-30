@@ -1,15 +1,21 @@
 // Browser-only buyer session coordination. The bearer stays in the HttpOnly
 // cookie; neither this module nor its journal ever reads it.
+import { CLAIM_TOKEN } from "./claim-contract.ts";
+
 const LOCK = "commerce-buyer-session-v1";
 const PENDING = "commerce-buyer-pending-v1";
 const CONTEXT = /^[A-Za-z0-9_-]{43}$/;
 const KEY = /^[A-Za-z0-9_.:-]{8,128}$/;
 const OPERATION =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-// The only no-key mutation: a committed one-shot form release, never a replay.
-// Keep this exception exact; payment UI owns GET-only recovery after uncertainty.
+// The only no-key mutations: handoff (a committed one-shot form release, never a replay) and
+// the Stripe refresh/cancel signals (stripe-buyer-ui-v1 §2; Go dedupes them by attempt).
+// Keep this set exact; payment UI owns GET-only recovery after uncertainty.
 const HANDOFF =
-  /^orders\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/payment\/handoff$/;
+  /^orders\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/payment\/(?:handoff|refresh|cancel)$/;
+// taiwan-cvs-logistics-v1 §5.2: verify re-reads a map selection; keyless, no body, safe to repeat.
+const CVS_VERIFY =
+  /^cvs-selections\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/verify$/;
 
 export type SessionStatus = {
   state: "absent" | "expired" | "inactive" | "active";
@@ -33,11 +39,14 @@ export class BuyerClientError extends Error {
     | "requires_reset"
     | "request_failed";
   readonly status?: number;
-  constructor(code: BuyerClientError["code"], status?: number) {
+  // The server's own refusal code (e.g. cvs_recipient_rejected) when a definite 4xx carried one; UI text only.
+  readonly detail?: string;
+  constructor(code: BuyerClientError["code"], status?: number, detail?: string) {
     super(code);
     this.name = "BuyerClientError";
     this.code = code;
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -126,12 +135,14 @@ async function request(
   context?: string,
   body?: unknown,
   idempotencyKey?: string,
+  claimToken?: string,
 ): Promise<Response> {
   const headers = new Headers();
   if (context !== undefined) headers.set("X-Buyer-Context", context);
   if (body !== undefined) headers.set("Content-Type", "application/json");
   if (idempotencyKey !== undefined)
     headers.set("Idempotency-Key", idempotencyKey);
+  if (claimToken !== undefined) headers.set("X-Commerce-Claim-Token", claimToken);
   try {
     return await fetch(`/api/buyer/${suffix}`, {
       method,
@@ -354,14 +365,23 @@ export function logoutBuyerSession(expectedContext: string): Promise<void> {
   });
 }
 
+// claimToken is the in-memory claim-link bearer: required on exactly the two claim
+// routes (GET claim-link, POST claim-link/redeem) and refused everywhere else, so it can
+// only ever leave the page in its own header (live-keyword-claims-v1 §7.2, §11.1).
 export async function buyerRequest(
   method: string,
   suffix: string,
   context: string,
   body?: unknown,
   idempotencyKey?: string,
+  claimToken?: string,
 ): Promise<Response> {
   if (!CONTEXT.test(context)) throw new BuyerClientError("context_changed");
+  const claimRoute =
+    (method === "GET" && suffix === "claim-link") ||
+    (method === "POST" && suffix === "claim-link/redeem");
+  if (claimRoute !== (claimToken !== undefined) || (claimToken !== undefined && !CLAIM_TOKEN.test(claimToken)))
+    throw new BuyerClientError("request_failed");
   if (
     !/^(?:GET|PUT|POST)$/.test(method) ||
     !/^[A-Za-z0-9_/?=&.%-]+$/.test(suffix) ||
@@ -369,7 +389,8 @@ export async function buyerRequest(
     suffix.startsWith("/")
   )
     throw new BuyerClientError("request_failed");
-  const handoff = method === "POST" && HANDOFF.test(suffix);
+  const handoff =
+    method === "POST" && (HANDOFF.test(suffix) || CVS_VERIFY.test(suffix));
   if (method !== "GET") {
     if (journal(storage())) throw new BuyerClientError("uncertain");
     if (
@@ -380,7 +401,14 @@ export async function buyerRequest(
       throw new BuyerClientError("request_failed");
   } else if (body !== undefined || idempotencyKey !== undefined)
     throw new BuyerClientError("request_failed");
-  const response = await request(method, suffix, context, body, idempotencyKey);
+  const response = await request(
+    method,
+    suffix,
+    context,
+    body,
+    idempotencyKey,
+    claimToken,
+  );
   if (response.status === 409) {
     try {
       const clone = response.clone();

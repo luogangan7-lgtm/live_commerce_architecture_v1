@@ -229,7 +229,7 @@ func readPickup(ctx context.Context, tx pgx.Tx, scope buyer.Scope, id string) (P
 }
 
 func validPickupInput(in PickupInput) bool {
-	if in.Kind != "cvs_711" && in.Kind != "cvs_familymart" {
+	if !isCVSKind(in.Kind) {
 		return false
 	}
 	return pickupNamespacePattern.MatchString(in.Namespace) && pickupCodePattern.MatchString(in.Code) &&

@@ -196,3 +196,11 @@ fetch, social read UI or keyword-to-order automation yet. Out-of-order provider
 observations remain source evidence, not inferred state. Add those concrete
 contracts next; measured contention on a single hot conversation would justify
 revisiting per-conversation sequencing. No performance-superiority claim.
+
+## Amendment by claims-retention-purge-v1 (integrator, 2026-09-30, U08 merge)
+
+Recorded from `contracts/claims-retention-purge-v1.md` §6 (FROZEN 2026-09-30); that file is the source of the rows.
+
+- Clause 5: the social grants gain the §4 rows for NOLOGIN `commerce_retention_writer` on `social.conversations`,
+  `social.messages`, `social.comment_events` (SELECT, DELETE, lock-only UPDATE(next_seq)/UPDATE(received_at)); the
+  MIso/MC gates must still pass (no `commerce_meta_*` login reaches a retention role).

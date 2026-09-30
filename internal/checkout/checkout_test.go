@@ -85,3 +85,31 @@ func TestExpiryWorkerRejectsInvalidInvocation(t *testing.T) {
 		t.Fatalf("invalid job result: %v", err)
 	}
 }
+
+// manual-fulfilment-v1 §5.2: the buyer order always carries "shipment" (null unless SHIPPED) and the
+// shipment object has exactly the buyer-safe keys: no note, void_reason, principal or version.
+func TestOrderShipmentShapeIsBuyerSafe(t *testing.T) {
+	raw, err := json.Marshal(Order{})
+	if err != nil || !strings.Contains(string(raw), `"shipment":null`) {
+		t.Fatalf("null shipment not emitted: %s %v", raw, err)
+	}
+	name := "Local Courier"
+	raw, err = json.Marshal(BuyerShipment{Status: "SHIPPED", CarrierCode: "other", CarrierName: &name, TrackingNumber: "0012345678"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]any
+	if err = json.Unmarshal(raw, &keys); err != nil || len(keys) != 6 {
+		t.Fatalf("buyer shipment keys: %s", raw)
+	}
+	for _, key := range []string{"status", "carrier_code", "carrier_name", "tracking_number", "tracking_url", "recorded_at"} {
+		if _, ok := keys[key]; !ok {
+			t.Errorf("missing %s in %s", key, raw)
+		}
+	}
+	for _, forbidden := range []string{"note", "void_reason", "principal_id", "version"} {
+		if _, ok := keys[forbidden]; ok {
+			t.Errorf("merchant-only key %s reached the buyer shape", forbidden)
+		}
+	}
+}

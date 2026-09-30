@@ -227,6 +227,7 @@ func TestIdentityLogoutAndInitialStoreSerialize(t *testing.T) {
 	}
 
 	var receipts, memberships, grants, warehouses, audits, revoked, revocations int
+	var grantList string
 	if err := f.owner.QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM identity.initial_stores WHERE principal_id=$1::uuid),
 		       (SELECT count(*) FROM identity.memberships WHERE principal_id=$1::uuid),
@@ -234,16 +235,19 @@ func TestIdentityLogoutAndInitialStoreSerialize(t *testing.T) {
 		       (SELECT count(*) FROM inventory.warehouses w JOIN identity.initial_stores i ON i.warehouse_id=w.id WHERE i.principal_id=$1::uuid),
 		       (SELECT count(*) FROM ops.audit_events WHERE principal_id=$1::uuid AND action='merchant.store_created'),
 		       (SELECT count(*) FROM identity.sessions WHERE token_hash=$2 AND revoked_at IS NOT NULL),
-		       (SELECT count(*) FROM identity.session_events WHERE principal_id=$1::uuid AND action='session.revoked')`,
-		session.PrincipalID, tokenHash(session.Token)).Scan(&receipts, &memberships, &grants, &warehouses, &audits, &revoked, &revocations); err != nil {
+		       (SELECT count(*) FROM identity.session_events WHERE principal_id=$1::uuid AND action='session.revoked'),
+		       coalesce((SELECT string_agg(permission, ',' ORDER BY permission) FROM identity.store_grants WHERE principal_id=$1::uuid),'')`,
+		session.PrincipalID, tokenHash(session.Token)).Scan(&receipts, &memberships, &grants, &warehouses, &audits, &revoked, &revocations, &grantList); err != nil {
 		t.Fatal(err)
 	}
 	if revoked != 1 || revocations != 1 {
 		t.Fatalf("logout did not commit exactly once: revoked=%d events=%d", revoked, revocations)
 	}
 	if created {
-		if receipts != 1 || memberships != 1 || grants != 8 || warehouses != 1 || audits != 1 {
-			t.Fatalf("partial committed store: receipts=%d memberships=%d grants=%d warehouses=%d audits=%d", receipts, memberships, grants, warehouses, audits)
+		// The exact owner permission set, not a count: the old literal 8 went stale
+		// when later migrations widened create_initial_store (see initialStoreGrants; 0065: 19 grants).
+		if receipts != 1 || memberships != 1 || grantList != initialStoreGrants || warehouses != 1 || audits != 1 {
+			t.Fatalf("partial committed store: receipts=%d memberships=%d grants=%d [%s] warehouses=%d audits=%d", receipts, memberships, grants, grantList, warehouses, audits)
 		}
 	} else if receipts != 0 || memberships != 0 || grants != 0 || warehouses != 0 || audits != 0 {
 		t.Fatalf("unauthorized store left state: receipts=%d memberships=%d grants=%d warehouses=%d audits=%d", receipts, memberships, grants, warehouses, audits)

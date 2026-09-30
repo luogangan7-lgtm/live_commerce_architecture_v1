@@ -1,4 +1,8 @@
-// Package pagination provides bounded, opaque positions for scoped keyset lists.
+// Package pagination owns bounded, opaque keyset positions for scoped lists: Encode and Decode bind
+// a cursor to a tenant, store, collection, parent and filter.
+//
+// It never authenticates (a cursor is untrusted input, re-checked with the caller's scope on every
+// read), never offers offset paging, and never returns an unbounded page.
 package pagination
 
 import (
@@ -66,7 +70,7 @@ func Decode(request Request, binding Binding, keyCount int) (int, []string, erro
 	if err != nil || len(raw) == 0 {
 		return 0, nil, invalid("cursor")
 	}
-	if (binding.Collection == "merchant-orders" || binding.Collection == "live-sessions") && base64.RawURLEncoding.EncodeToString(raw) != request.Cursor {
+	if timeKeyed(binding.Collection) && base64.RawURLEncoding.EncodeToString(raw) != request.Cursor {
 		return 0, nil, invalid("cursor")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -78,7 +82,7 @@ func Decode(request Request, binding Binding, keyCount int) (int, []string, erro
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return 0, nil, invalid("cursor")
 	}
-	if binding.Collection == "merchant-orders" || binding.Collection == "live-sessions" {
+	if timeKeyed(binding.Collection) {
 		canonical, err := json.Marshal(value)
 		if err != nil || !bytes.Equal(raw, canonical) {
 			return 0, nil, invalid("cursor")
@@ -123,13 +127,15 @@ func validBinding(b Binding) bool {
 	case "products", "warehouses", "inventory", "provider-accounts", "markets":
 		return b.ParentID == "" && b.Filter == ""
 	case "merchant-orders":
-		return b.ParentID == "" && (b.Filter == "all" || b.Filter == "DRAFT" || b.Filter == "AWAITING_PAYMENT" || b.Filter == "CONFIRMED" || b.Filter == "CANCELLED")
+		return b.ParentID == "" && (b.Filter == "all" || b.Filter == "DRAFT" || b.Filter == "AWAITING_PAYMENT" || b.Filter == "CONFIRMED" || b.Filter == "CANCELLED" || b.Filter == "shipped" || b.Filter == "unshipped")
 	case "live-sessions":
 		return b.ParentID == "" && b.Filter == ""
+	case "customers": // internal/customers.List: Filter is empty or the sha256 hex of the search text
+		return b.ParentID == "" && (b.Filter == "" || len(b.Filter) == 64)
 	case "delivery-services":
 		return command.ValidID(b.ParentID) && len(b.Filter) == 2 &&
 			b.Filter[0] >= 'A' && b.Filter[0] <= 'Z' && b.Filter[1] >= 'A' && b.Filter[1] <= 'Z'
-	case "skus":
+	case "skus", "claim-bundles": // claim-bundles: ParentID is the live session (internal/claims.ListBundles)
 		return command.ValidID(b.ParentID) && b.Filter == ""
 	case "catalog-ledger":
 		return command.ValidID(b.ParentID) && len(b.Filter) == 64
@@ -139,7 +145,7 @@ func validBinding(b Binding) bool {
 }
 
 func validPositionKey(collection string, position int, key string) bool {
-	if collection == "merchant-orders" || collection == "live-sessions" {
+	if timeKeyed(collection) {
 		if position == 0 {
 			parsed, err := time.Parse(merchantOrderTime, key)
 			return err == nil && parsed.Format(merchantOrderTime) == key
@@ -153,13 +159,19 @@ func validPositionKey(collection string, position int, key string) bool {
 }
 
 func validKeyCount(collection string, count int) bool {
-	if collection == "merchant-orders" || collection == "live-sessions" {
+	if timeKeyed(collection) {
 		return count == 2
 	}
 	if collection == "delivery-services" || collection == "markets" {
 		return count == 1
 	}
 	return count == 1 || count == 2
+}
+
+// timeKeyed collections page by (created_at, id): exactly two keys, a microsecond UTC
+// timestamp then a UUID, and only byte-canonical cursors are accepted.
+func timeKeyed(collection string) bool {
+	return collection == "merchant-orders" || collection == "live-sessions" || collection == "claim-bundles" || collection == "customers"
 }
 
 func invalid(what string) error { return fmt.Errorf("%w: invalid %s", command.ErrInvalid, what) }

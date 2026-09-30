@@ -1,3 +1,7 @@
+// payment.go owns the private /v1/buyer/orders/{id}/payment* routes: view, prepare, handoff and
+// the Stripe refresh/cancel signals. It never authenticates buyers itself (handler.go does),
+// never sees a provider key or performs provider I/O, and never logs a handoff redirect URL.
+
 package buyerhttp
 
 import (
@@ -72,8 +76,20 @@ type paymentPrepareResponse struct {
 	AmountMinor int64  `json:"amount_minor"`
 }
 
+// admittedPaymentMethod is the prepare allow-list; the service still rejects a provider it was
+// not configured with (Stripe on a PAYUNi-only deployment answers 422).
+func admittedPaymentMethod(code string) bool {
+	return code == "payuni_credit" || code == "stripe_checkout"
+}
+
 func isPaymentRoute(kind routeKind) bool {
-	return kind == paymentRoute || kind == paymentPrepareRoute || kind == paymentHandoffRoute
+	return kind == paymentRoute || kind == paymentPrepareRoute || isKeylessPaymentRoute(kind)
+}
+
+// Handoff, refresh and cancel take no body and no Idempotency-Key: each request is a fresh
+// explicit buyer action and the database (not a replay receipt) bounds repeats.
+func isKeylessPaymentRoute(kind routeKind) bool {
+	return kind == paymentHandoffRoute || kind == paymentRefreshRoute || kind == paymentCancelRoute
 }
 
 func (h *handler) paymentRequest(ctx context.Context, r *http.Request, selected route, storeID, token, key string) (any, error) {
@@ -85,7 +101,7 @@ func (h *handler) paymentRequest(ctx context.Context, r *http.Request, selected 
 		if err := decodeJSON(r, &in); err != nil {
 			return nil, err
 		}
-		if in.MethodCode != "payuni_credit" || in.MethodVersion < 1 ||
+		if !admittedPaymentMethod(in.MethodCode) || in.MethodVersion < 1 ||
 			(in.Locale != "zh-CN" && in.Locale != "zh-TW" && in.Locale != "en") {
 			return nil, responseError{http.StatusUnprocessableEntity, "invalid_request"}
 		}
@@ -99,6 +115,11 @@ func (h *handler) paymentRequest(ctx context.Context, r *http.Request, selected 
 			Currency: result.Currency, AmountMinor: result.AmountMinor}, nil
 	case paymentHandoffRoute:
 		return h.payment.TakeHosted(ctx, token, storeID, selected.id)
+	case paymentRefreshRoute:
+		// checkout.request_stripe_signal via the hosted service; 404 when Stripe is not enabled.
+		return h.payment.RefreshPayment(ctx, token, storeID, selected.id)
+	case paymentCancelRoute:
+		return h.payment.CancelPayment(ctx, token, storeID, selected.id)
 	default:
 		return nil, responseError{http.StatusNotFound, "not_found"}
 	}

@@ -1,0 +1,25 @@
+# RED proof SP13 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: reference handler flushes the 200 ACK before COMMIT
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP13WebhookHTTP$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_webhook_http_test.go:556: status=200 body="{\"received\":true}" want 503 "{\"error\":\"unavailable\"}"
+    stripe_webhook_http_test.go:573: status=200 body="{\"received\":true}" want 503 "{\"error\":\"unavailable\"}"
+--- FAIL: TestStripeSP13WebhookHTTP (6.93s)
+    --- PASS: TestStripeSP13WebhookHTTP/rejections_and_frozen_codes (0.02s)
+    --- PASS: TestStripeSP13WebhookHTTP/accept_atomically_and_dedupe_changed_body (0.02s)
+    --- PASS: TestStripeSP13WebhookHTTP/ignore_and_quarantine_reasons (0.08s)
+    --- PASS: TestStripeSP13WebhookHTTP/malformed_after_signature_is_200_once (0.01s)
+    --- FAIL: TestStripeSP13WebhookHTTP/no_ack_before_commit_and_commit_failure_503 (4.20s)
+    --- FAIL: TestStripeSP13WebhookHTTP/missing_signal_linkage_cannot_ack (0.01s)
+    --- PASS: TestStripeSP13WebhookHTTP/signature_endpoint_mismatch_and_stale_key_version (0.80s)
+    --- PASS: TestStripeSP13WebhookHTTP/historical_admission_survives_binding_disable_and_api_rotation_but_not_endpoint_disable (0.02s)
+    --- PASS: TestStripeSP13WebhookHTTP/wrong_profile_then_correct_profile_admits_exactly_one_signal (0.01s)
+    --- PASS: TestStripeSP13WebhookHTTP/signing_material_unavailable_is_503 (0.00s)
+    --- PASS: TestStripeSP13WebhookHTTP/concurrency_cap_is_exactly_32_and_the_rest_are_503_busy (0.54s)
+    --- PASS: TestStripeSP13WebhookHTTP/constructor_negatives (0.06s)
+    --- PASS: TestStripeSP13WebhookHTTP/no_forbidden_material_in_logs_or_database (0.16s)
+FAIL
+FAIL	livecommerce/tests/foundation	8.099s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

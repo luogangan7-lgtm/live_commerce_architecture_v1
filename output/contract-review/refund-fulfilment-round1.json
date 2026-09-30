@@ -1,0 +1,107 @@
+{
+ "verdict": "BLOCK",
+ "findings": [
+  {
+   "severity": "P1",
+   "where": "stripe-refund-v1 §4.1 (stripe_signals/receipts deltas), §6 SignalWorker, §7.3 last sentence; existing post_river/0012_stripe_payment.sql:339-397 (stripe_webhook_commit, guard_stripe_receipt_link), :537-563 (load_stripe_signal), 0061:1092 (consume_stripe_signal), 0061:904 (require_stripe_query)",
+   "problem": "Refund signals cannot be committed or consumed with the frozen code the contract says is unchanged. (1) stripe_webhook_commit and the deferred guard_stripe_receipt_link require the job to have args.operation_id = receipt.attempt_id. The contract says a refund signal's job carries the refund op id, so every accepted refund.* webhook fails with 23514 at COMMIT. It is never ACKed and Stripe retries it forever. (2) stripe_webhook_prepare returns (disposition,receipt_id,attempt_id,session_id,signal_id) and has no refund_id, so the Go ingress cannot build the job args. (3) load_stripe_signal and consume_stripe_signal go through require_stripe_query, which accepts only BUYER_PAYMENT_QUERY/stripe.checkout_session ops. A signal leased on the refund op, including MERCHANT_REFRESH, therefore cannot be loaded or consumed. (4) load_stripe_signal does not return the receipt's object_type. Today's SignalWorker (stripe_signal.go:157) turns any session-less signal on a captured attempt into NOOP_TERMINAL, so charge.refunded signals are dropped silently. (5) payment_job_queue joins checkout.payment_attempts on args.operation_id, which returns NULL for a refund op id.",
+   "fix": "Replace the last sentence of §7.3 with: \"0062/post_river 0013 CREATE OR REPLACE stripe_webhook_prepare (DROP+CREATE; the return type adds refund_id uuid and object_type text), stripe_webhook_commit and guard_stripe_receipt_link so that expected operation_id = coalesce(r.refund_id, r.attempt_id). stripe_signals.attempt_id is always the attempt and refund_id is the refund. Add integration.load_stripe_refund_signal(refund_op,gen,token,profile,job,signal) and integration.consume_stripe_refund_signal(...), fenced by the refund-op lease. load_stripe_signal gains object_type in its result so the charge branch can be told apart from buyer refresh. payment_job_queue resolves the attempt through stripe_refunds when args.operation_id is a refund id.\" Add RF08 cases: an accepted refund webhook commits and its signal is consumed; a charge.refunded signal produces a charge observation and not NOOP_TERMINAL."
+  },
+  {
+   "severity": "P1",
+   "where": "stripe-refund-v1 §4.2 Roles/RLS, §4.4 request_stripe_refund/_refresh, §2 flow ('API (runtime pool)'); manual-fulfilment-v1 §4 Roles/RLS, §4.1 record_manual_shipment",
+   "problem": "The checkout_writer-owned merchant definers cannot run with today's grants. commerce_checkout_writer has no INSERT on ops.command_results or ops.audit_events (only commerce_runtime has them, 0002:228/0001:106). It has no EXECUTE on identity.resolve_access and no SELECT on identity.sessions, which the 0027/0060 fresh-final-auth pattern needs. Its integration.operations policy (0016:87) admits only actor_kind='BUYER_PAYMENT_QUERY' with app.buyer_id/app.buyer_session_id, and operation_events (0016:95) likewise admits only BUYER_PAYMENT_QUERY. Its policies on stripe_sessions and stripe_signals (0061) and on payment_attempts (0016:56) are scoped to owner_id=app.buyer_id. A merchant-context call therefore cannot read payment_intent_id, insert the PAYMENT_REFUND op or its event, or insert a MERCHANT_REFRESH signal. The River side also fails: commerce_runtime has INSERT only on river.river_job (migrate.go:120), and reject_legacy_family_job blocks payment kinds there, so the payment_refund_v1 and refresh payment_signal_v1 InsertTx cannot succeed from the merchant API pool.",
+   "fix": "Add a 'Grants and policies' list to both contracts: \"GRANT SELECT(token_hash,principal_id,audience,revoked_at,expires_at) ON identity.sessions and EXECUTE identity.resolve_access TO commerce_checkout_writer. GRANT INSERT ON ops.command_results, ops.audit_events TO commerce_checkout_writer, with RESTRICTIVE policies principal_id = app.principal_id and scope = app GUCs. New policies on integration.operations and integration.operation_events for actor_kind='PAYMENT_REFUND' scoped by app.tenant_id/app.store_id. Merchant definers set app.buyer_id/app.buyer_session_id from the locked order (as apply_capture does) before reading stripe_sessions or inserting stripe_signals. Name the merchant pool that inserts payment_refund_v1/payment_signal_v1: either grant that pool's role USAGE on river_payment, INSERT and UPDATE(kind) on river_payment.river_job and the sequence, and update the internal/platform pool validator, or have the definer insert the job itself.\" Extend RF03 and MF02 with the privilege matrix for each."
+  },
+  {
+   "severity": "P1",
+   "where": "stripe-refund-v1 RD9, §3.1 charge report keys, §4.4 mark_stripe_refund_sent, §6 worker ('record charge obs (apply may suppress); if suppressed…') and apply_stripe_charge",
+   "problem": "The pre-send check against Dashboard refunds cannot work as written, so a double refund stays possible. apply_stripe_charge runs later, in the CaptureWorker via payment_reconcile_v1, and not in the refund worker's transaction. The worker therefore goes straight on to mark_sent=SEND and POST before any suppression exists. The charge report also has no RefundRef, so apply cannot tell which REQUESTED refund the report was a pre-send check for. checkout_writer (the apply owner) has no UPDATE on suppressed_at, and mark_stripe_refund_sent's SEND condition does not require a fresh, clean pre-send check.",
+   "fix": "Replace RD9's mechanism with: \"integration.record_stripe_charge_observation, called under the refund-op lease with Via='presend' and RefundRef set, compares AmountRefunded with the Σ amount of this attempt's refunds that have been sent and have no FAILED/CANCELED/REJECTED fact, in the same transaction. If AmountRefunded is larger, it sets suppressed_at and inserts a LOCAL 'unsent' observation plus its reconcile job. integration_writer gains SELECT on refund_facts and review_cases for this. mark_stripe_refund_sent returns SEND only if a presend charge observation for this refund was recorded under the current generation, ≤60 s ago, and did not suppress, and no REFUND_HISTORY or CONFLICTING_REPORT review exists on the attempt.\" Add RefundRef to the §3.1 charge report. RF08 must test that a Dashboard refund made before the first send results in zero POST /v1/refunds, using the fake's request counter."
+  },
+  {
+   "severity": "P1",
+   "where": "stripe-refund-v1 RD6 and §5 effect table; manual-fulfilment-v1 §2 deferred trigger; existing 0061_stripe_psp.sql:752-780 (apply_stripe_observation paid branch)",
+   "problem": "Refund-originated reviews put orders into allocation failure. On every paid session observation, the frozen apply_stripe_observation checks EXISTS(any review_cases row for the attempt). If one exists and the order is not AWAITING_PAYMENT, it runs UPDATE checkout.orders SET fulfillment_state='PAID_ALLOCATION_FAILED' and upserts the work item to REVIEW_REQUIRED. This also happens when the capture is not new (a reconcile job retry, or a later session report with a new hash). Once a refund inserts REFUND_HISTORY, REFUND_UNRESOLVED, REFUND_AMOUNT_MISMATCH, REFUND_CONFLICTING or a dispute CONFLICTING_REPORT, any replay turns a CONFIRMED, allocated order (MERCHANT_SHIPPED included) into PAID_ALLOCATION_FAILED. That contradicts RD6, and it either breaks the MF head⇔state trigger (aborting apply in a retry loop) or silently corrupts state. The MF trigger's table is also not specified.",
+   "fix": "Add to stripe-refund-v1 §4.4: \"0062 CREATE OR REPLACE payments.apply_stripe_observation: the post-capture review branch (orders UPDATE and work-item upsert) runs only when v_new_capture OR v_closed_before. Reviews with reason LIKE 'REFUND_%', and reviews inserted by apply_stripe_charge, never change order or work-item state. RF12 hashes the new body instead of asserting it is byte-identical.\" Add to manual-fulfilment §2: \"The deferred constraint trigger is installed on both checkout.orders (AFTER UPDATE OF fulfillment_state) and manual_shipment_heads.\" Add an RF07 case: capture → ship → REFUND_HISTORY → replay the capture reconcile job, and assert fulfillment_state and work_state are unchanged."
+  },
+  {
+   "severity": "P1",
+   "where": "stripe-refund-v1 §7.1 merchant-orders payment_state; manual-fulfilment-v1 §4.1 read_merchant_orders; existing internal/merchantorders/orders.go:257-287",
+   "problem": "The Go projection validator makes the merchant list fail for refunded or shipped orders. It rejects any payment_state outside {NOT_STARTED,REVIEW_REQUIRED,CAPTURED,AUTHORIZED,PENDING} and any fulfillment_state outside {MANUAL_UNASSIGNED,CANCELLED,PAID_ALLOCATION_FAILED}. It also requires WorkState READY ⇒ PaymentState CAPTURED ∧ FulfillmentState MANUAL_UNASSIGNED. Every refunded order (PARTIALLY_REFUNDED/REFUNDED), every order with a post-capture refund review (READY work + REVIEW_REQUIRED) and every MERCHANT_SHIPPED order fails decoding, and the list or detail request errors. Neither contract amends these frozen merchant-orders-v1 invariants.",
+   "fix": "Add to both contracts' §HTTP: \"merchant-orders-v1 projection invariants amended: payment_state admits PARTIALLY_REFUNDED and REFUNDED. fulfillment_state admits MERCHANT_SHIPPED. WorkState READY ⇒ CommercialState CONFIRMED ∧ PaymentState ∈ {CAPTURED,PARTIALLY_REFUNDED,REFUNDED,REVIEW_REQUIRED} ∧ FulfillmentState ∈ {MANUAL_UNASSIGNED,MERCHANT_SHIPPED}. MERCHANT_SHIPPED ⇒ WorkState READY.\" Assign orders.go to commerce_worker. Add RF09/MF05 cases that list a refunded order, a shipped order and a READY order with a refund review."
+  },
+  {
+   "severity": "P1",
+   "where": "manual-fulfilment-v1 MD6, E2, §4.1 unshipped filter/export",
+   "problem": "MD6 lets orders ship after a post-capture review. It assumes a READY payment_work_items row means there is no review, but the work item is written once at capture. Reviews added later, such as REFUND_HISTORY (Dashboard refund), REFUND_UNRESOLVED, REFUND_CONFLICTING and CONFLICTING_REPORT (dispute), leave it READY. Orders that are disputed, externally refunded or have a refund of unknown outcome therefore stay shippable and appear in the unshipped CSV.",
+   "fix": "MD6: replace \"(implies a matched CAPTURED fact and no review)\" with \"and a CAPTURED fact, and NOT EXISTS payments.review_cases for the work item's attempt other than PROVIDER_PRESENTMENT_DRIFT\". Apply the same predicate to the `unshipped` filter and to export_unshipped_orders (commerce_auth already has SELECT on review_cases). MF03 adds: REFUND_HISTORY review → 422 not_shippable, and the order is absent from the export."
+  },
+  {
+   "severity": "P1",
+   "where": "manual-fulfilment-v1 §4 first SQL comment and MD8/MF02; stripe-refund-v1 RD10, §4.1, RF03 and the 0065 ruling",
+   "problem": "The permission migrations conflict with each other and with the rulings. 0063 says \"re-derive 0033 list + 'fulfillment:write','orders:export'\". Because 0062 runs first and adds payments:refund, rebuilding from the 0033 list drops payments:refund: ADD CONSTRAINT then fails if any grant row exists, or silently narrows the vocabulary. The ruling moves the creator grant into 0065_owner_provisioning.sql, but no section, gate, owner or sequence exists for 0065. RF03, MF02, RD10 and MD8 still say \"no onboarding grant\", which contradicts the binding ruling.",
+   "fix": "0063 comment becomes: \"re-derive the current store_grants_permission_check via pg_get_constraintdef (0062 list incl. payments:refund) + 'fulfillment:write','orders:export'\". Add a §'0065 owner provisioning' to stripe-refund-v1: integrator-owned; runs after 0063 and 0064; CREATE OR REPLACE of the 0027 identity.create_initial_store keeping its lock order and replay; grant list = the 0027 list + live:read, live:manage, payments:refund, fulfillment:write, orders:export; gate OP01 (REAL_PG): a fresh creator has exactly those grants, onboarding replay adds nothing, other members get none, and existing principals are not backfilled. Update cmd/admin-fixture accordingly. Reword RF03/MF02: \"0062/0063 add no grant; the onboarding grant exists only via 0065 (OP01)\"."
+  },
+  {
+   "severity": "P2",
+   "where": "stripe-refund-v1 §6 apply_stripe_charge and apply_stripe_refund step 5; RF07 'replay in any order converges'",
+   "problem": "Apply does not handle reports out of order. A charge snapshot taken while refund A was SUCCEEDED, but applied after A's late FAILED fact, shows AmountRefunded > Σ(non-released) and records a sticky REFUND_HISTORY that blocks all refunds; resolution is NOT_IMPLEMENTED. Likewise, a stale 'succeeded' refund report applied after the FAILED fact raises REFUND_CONFLICTING, although Stripe only moves succeeded→failed. RF07's convergence claim is therefore false.",
+   "fix": "Add: \"apply_stripe_charge counts a refund as non-released unless its FAILED/CANCELED/REJECTED fact's source observation has received_at ≤ the charge observation's received_at. apply_stripe_refund treats 'succeeded' as a no-op when a FAILED/CANCELED fact exists whose source observation is newer. REFUND_CONFLICTING is raised only when the succeeded report is newer than the failure.\""
+  },
+  {
+   "severity": "P2",
+   "where": "stripe-refund-v1 RD5, §4.2 CHECKs, §6 apply step 3",
+   "problem": "The UNKNOWN path can raise REFUND_UNRESOLVED too early. mark_sent=SEND has no deadline, and list-closure needs only now ≥ resend_until. A first send at requested_at+19h59m that times out gets listed seconds later, possibly before Stripe finishes creating the refund. The result is list=0 and a sticky REFUND_UNRESOLVED on a refund that actually succeeds, which blocks further refunds (and shipping, once MD6 is fixed).",
+   "fix": "Add \"CHECK(first_sent_at IS NULL OR first_sent_at < resend_until - interval '1 hour')\" (mark_sent returns CLOSED otherwise, with a LOCAL suppression before any send → REJECTED). Step 3 becomes \"Via=list ∧ ListMatchCount=0 ∧ now ≥ greatest(resend_until, last_sent_at + interval '15 minutes')\", mirroring checkout's expires_at+15 min list closure."
+  },
+  {
+   "severity": "P2",
+   "where": "stripe-refund-v1 §7.3 'Signal caps (signal_count ≤ 64) apply per refund and per attempt'",
+   "problem": "Refund webhooks can crowd out the late refund.failed event. Through the unchanged stripe_webhook_commit, each accepted refund or charge event also increments stripe_sessions.signal_count (cap 64 per attempt, shared with checkout events). Up to 20 partial refunds, each producing created/updated/charge.refunded events, can exhaust the cap. A late refund.failed is then IGNORED signal_cap and capacity is not released.",
+   "fix": "State: \"A refund-object receipt increments only stripe_refunds.signal_count (cap 64 per refund). A charge-object receipt increments a new stripe_sessions.charge_signal_count (cap 64). The checkout signal_count is unchanged by refund traffic.\""
+  },
+  {
+   "severity": "P2",
+   "where": "stripe-refund-v1 §4.2 refund_facts FK, §4.1 stripe_signals.refund_id, stripe_refunds.order_id",
+   "problem": "Tenant/attempt scoping relies only on definer code. The refund_facts(refund_id) and stripe_signals(refund_id) FKs are single-column, so a fact or signal for attempt X could reference a refund of attempt Y. stripe_refunds.order_id is not tied to the attempt's order.",
+   "fix": "Add UNIQUE(tenant_id,store_id,attempt_id,id) and a FK (tenant_id,store_id,order_id,attempt_id) → checkout.payment_attempts(tenant_id,store_id,order_id,id) (add that unique key if missing) on stripe_refunds. refund_facts and stripe_signals use a composite FK (tenant_id,store_id,attempt_id,refund_id) → stripe_refunds(tenant_id,store_id,attempt_id,id)."
+  },
+  {
+   "severity": "P2",
+   "where": "stripe-refund-v1 §4.4 request (op insert), RD13/R-5, §4.4 load_stripe_refund",
+   "problem": "Two gaps around the refund op and its credential. (a) The refund op row's binding_id, binding_version, external_asset_id, request, request_hash and job_id are unspecified. The generic claim_operation (0035:345) moves a non-MERCHANT op whose binding changed to UNKNOWN 'binding_changed' and returns blocked_binding forever, so a refund can stall with capacity held and no review. (b) The credential version is frozen at request time. After a rotation that revokes that key, same-key resends, retrieves and lists all return 401, and a SUBMITTING refund can never be resolved.",
+   "fix": "Add: \"The refund op copies binding_id, binding_version and external_asset_id from the attempt op, with request = {refund_id, attempt_id}. A blocked_binding claim of a PAYMENT_REFUND op records a LOCAL escalate report → review REFUND_UNRESOLVED. POST /v1/refunds uses the frozen credential_version. GET retrieve/list and resends (Stripe idempotency is per account) may use the account's current head of the same account_id, and the version actually used is recorded in the report.\""
+  },
+  {
+   "severity": "P2",
+   "where": "stripe-refund-v1 §4.3 table",
+   "problem": "The rule for combined reviews is undefined. The table is written per reason, so an attempt with CLOSURE_CONTRADICTED + PROVIDER_PRESENTMENT_DRIFT, or PAID_ALLOCATION_FAILED + REFUND_HISTORY, has no specified outcome.",
+   "fix": "Add: \"Allowed iff every review reason on the attempt ∈ {PROVIDER_PRESENTMENT_DRIFT, CLOSURE_CONTRADICTED, PAID_ALLOCATION_FAILED}. Full-remaining-only iff any of the last two is present. Otherwise refund_blocked_review.\" Add both combinations to RF04."
+  },
+  {
+   "severity": "P2",
+   "where": "stripe-refund-v1 §7.1 ('no Stripe ids'), RF09; manual-fulfilment-v1 §3.1 and §4 carrier_code CHECK, MF01",
+   "problem": "The binding rulings were not carried into the body text. R-9 lets merchants see re_…, but §7.1 still says 'no Stripe ids' and the items list has no field for it. M-3 adds hilife_cvs and okmart_cvs, but the §3.1 list and the DDL CHECK still have five codes. An implementer copying the SQL will ship the wrong vocabulary.",
+   "fix": "§7.1 GET items add `stripe_refund_id: string|null` (merchant only; the buyer projection is unchanged) and change 'no Stripe ids' to 'no Stripe ids except the merchant refund id (R-9)'. §3.1 and the §4 CHECK list: 'seven_eleven_cvs','familymart_cvs','hilife_cvs','okmart_cvs','sf_express','chunghwa_post','other', with display names 萊爾富/OK mart. MF01 and MF07 cover the new codes."
+  },
+  {
+   "severity": "P2",
+   "where": "manual-fulfilment-v1 §5.3 CSV export, MF01",
+   "problem": "CSV handling has three gaps. (1) The formula guard misses a leading LF and leading whitespace followed by =,+,-,@. (2) Every '+886…' phone becomes \"'+886…\", which breaks carrier-tool import. (3) The claim 'pickup codes keep leading zeroes' does not hold once the BOM-marked file is opened in a spreadsheet, and MF01 tests only raw bytes.",
+   "fix": "Guard text: \"any cell whose first non-space character is =,+,-,@ or whose first character is TAB, CR or LF is prefixed with '\". Phone is exported as digits only in national form (e.g. 0912345678), which avoids the guard. Replace 'leading zeroes kept' with 'leading zeroes are kept in the file bytes; spreadsheet users must import columns as text (documented in the UI)'. MF01 adds leading-space and LF vectors."
+  },
+  {
+   "severity": "P2",
+   "where": "manual-fulfilment-v1 §5.1 PUT body for status=VOIDED; §4 'VOIDED copies carrier/tracking'",
+   "problem": "The void request body is ambiguous. The PUT body always carries carrier_code and tracking_number, and the table makes them NOT NULL, but a void copies them from the voided version. Whether the client must send null, send identical values, or may send different values is unspecified, which is an idempotency and request-hash hole.",
+   "fix": "Add: \"For status=VOIDED the body must have carrier_code, carrier_name, tracking_number, tracking_url and note all null, and void_reason non-null. The server copies the carrier and tracking fields from the head version. Any non-null value → 422 invalid_void.\""
+  },
+  {
+   "severity": "P2",
+   "where": "stripe-refund-v1 RD11/R-2 vs 架构 §12.3",
+   "problem": "§12.3 requires refund approval authority and a refund amount limit independent of general support permission. v1 has no per-principal amount limit, and the deviation is not listed as a known limit.",
+   "fix": "Add to §11: \"No per-principal refund amount limit (§12.3 退款金额上限); payments:refund authorizes up to the full refundable amount. Owner ruling required before any non-owner principal is granted payments:refund.\""
+  }
+ ]
+}

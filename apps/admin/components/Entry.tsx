@@ -1,4 +1,9 @@
 "use client";
+// Signed-out / onboarding shell for /[locale]/ and (signed-out only) /[locale]/signup, /[locale]/reset.
+// BFF routes called: POST /api/auth/login (OIDC) → /v1/identity/login/start, POST /api/auth/logout →
+// /v1/identity/logout, POST /api/onboarding/initial-store → /v1/identity/initial-store
+// (internal/identityhttp). With passwordMode set, the signed-out panel is PasswordAuth.tsx, whose
+// /api/auth/password/* routes are documented there.
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { localeNames, locales, type Locale } from "@live-commerce/i18n";
@@ -13,6 +18,7 @@ import {
 } from "@/lib/entry-state";
 import { Icon } from "./Icon";
 import { signalLogout } from "@/lib/session-events";
+import { PasswordAuth, type PasswordMode } from "./PasswordAuth";
 
 type EntryStatus = "disabled" | "signed-out" | "onboarding" | "unavailable";
 
@@ -45,12 +51,21 @@ export function Entry({
   authResult,
   onboardingEnabled,
   currencies,
+  passwordMode,
+  oidc = true,
+  path = "",
 }: {
   locale: Locale;
   status: EntryStatus;
   authResult: string;
   onboardingEnabled: boolean;
   currencies: string[];
+  // U6: set only when COMMERCE_PASSWORD_LOGIN_ENABLED=1; replaces the OIDC signed-out panel.
+  passwordMode?: PasswordMode;
+  // False when no COMMERCE_OIDC_ISSUER is configured: the OIDC button is not rendered (U4).
+  oidc?: boolean;
+  // Page path below /<locale>/ kept when switching language ("" | "signup" | "reset").
+  path?: string;
 }) {
   const c = entryCopy[locale];
   // Native locale data labels currencies; the selected ISO value never changes.
@@ -272,7 +287,7 @@ export function Entry({
         return;
       }
     }
-    window.location.assign(`/${next}/`);
+    window.location.assign(`/${next}/${path}`);
   }
 
   async function signOut() {
@@ -363,7 +378,9 @@ export function Entry({
       </header>
 
       <main className="entry-main">
-        {status === "signed-out" ||
+        {status === "signed-out" && passwordMode ? (
+          <PasswordAuth locale={locale} mode={passwordMode} oidc={oidc} notice={message} />
+        ) : status === "signed-out" ||
         status === "disabled" ||
         status === "unavailable" ? (
           <section

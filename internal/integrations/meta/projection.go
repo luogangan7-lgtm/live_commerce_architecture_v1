@@ -48,7 +48,7 @@ func projectSocial(c payloadContext, assetID, kind string, plaintext []byte) (so
 	default:
 		return socialProjection{}, ErrConsumerPayload
 	}
-	unit, err := parseStrict(plaintext)
+	unit, err := ParseStrict(plaintext)
 	if err != nil || !bytes.Equal(canonical(unit), plaintext) {
 		return socialProjection{}, ErrConsumerPayload
 	}

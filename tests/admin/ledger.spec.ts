@@ -15,13 +15,13 @@ test("approved ledger reproduction and mobile table remain usable", async ({
   await page
     .getByRole("radio", { name: "选择 AC-002-BK", exact: true })
     .check();
-  await mkdir(".impeccable/review", { recursive: true });
+  await mkdir("output/playwright/ledger-review", { recursive: true });
   await page.screenshot({
-    path: ".impeccable/review/hero-repro.png",
+    path: "output/playwright/ledger-review/hero-repro.png",
     animations: "disabled",
   });
   await page.screenshot({
-    path: ".impeccable/review/desktop.png",
+    path: "output/playwright/ledger-review/desktop.png",
     animations: "disabled",
   });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -32,7 +32,7 @@ test("approved ledger reproduction and mobile table remain usable", async ({
     ),
   ).toBe(true);
   await page.screenshot({
-    path: ".impeccable/review/mobile.png",
+    path: "output/playwright/ledger-review/mobile.png",
     fullPage: true,
     animations: "disabled",
   });

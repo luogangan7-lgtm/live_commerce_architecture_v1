@@ -1,0 +1,605 @@
+=== RUN   TestPaymentReconcileJobShapeAndValidation
+--- PASS: TestPaymentReconcileJobShapeAndValidation (0.00s)
+=== RUN   TestCaptureWorkerConstructorRejectsInvalidAuthority
+--- PASS: TestCaptureWorkerConstructorRejectsInvalidAuthority (0.00s)
+=== RUN   TestCaptureApplyErrorClassification
+=== RUN   TestCaptureApplyErrorClassification/invalid_input
+=== RUN   TestCaptureApplyErrorClassification/missing_report_or_provenance
+=== RUN   TestCaptureApplyErrorClassification/deadlock
+=== RUN   TestCaptureApplyErrorClassification/timeout
+=== RUN   TestCaptureApplyErrorClassification/lock_wait
+=== RUN   TestCaptureApplyErrorClassification/transaction_fault
+--- PASS: TestCaptureApplyErrorClassification (0.00s)
+    --- PASS: TestCaptureApplyErrorClassification/invalid_input (0.00s)
+    --- PASS: TestCaptureApplyErrorClassification/missing_report_or_provenance (0.00s)
+    --- PASS: TestCaptureApplyErrorClassification/deadlock (0.00s)
+    --- PASS: TestCaptureApplyErrorClassification/timeout (0.00s)
+    --- PASS: TestCaptureApplyErrorClassification/lock_wait (0.00s)
+    --- PASS: TestCaptureApplyErrorClassification/transaction_fault (0.00s)
+=== RUN   TestMethodInputValidation
+=== RUN   TestMethodInputValidation/country
+=== RUN   TestMethodInputValidation/market_id
+=== RUN   TestMethodInputValidation/empty_label
+=== RUN   TestMethodInputValidation/control_label
+=== RUN   TestMethodInputValidation/inverted_range
+=== RUN   TestMethodInputValidation/unknown_code
+=== RUN   TestMethodInputValidation/minimum
+=== RUN   TestMethodInputValidation/orphan_binding
+=== RUN   TestMethodInputValidation/environment
+=== RUN   TestMethodInputValidation/sort
+=== RUN   TestMethodInputValidation/maximum
+=== RUN   TestMethodInputValidation/negative_version
+=== RUN   TestMethodInputValidation/overflow_version
+=== RUN   TestMethodInputValidation/overlong_label
+=== RUN   TestMethodInputValidation/orphan_connection
+--- PASS: TestMethodInputValidation (0.00s)
+    --- PASS: TestMethodInputValidation/country (0.00s)
+    --- PASS: TestMethodInputValidation/market_id (0.00s)
+    --- PASS: TestMethodInputValidation/empty_label (0.00s)
+    --- PASS: TestMethodInputValidation/control_label (0.00s)
+    --- PASS: TestMethodInputValidation/inverted_range (0.00s)
+    --- PASS: TestMethodInputValidation/unknown_code (0.00s)
+    --- PASS: TestMethodInputValidation/minimum (0.00s)
+    --- PASS: TestMethodInputValidation/orphan_binding (0.00s)
+    --- PASS: TestMethodInputValidation/environment (0.00s)
+    --- PASS: TestMethodInputValidation/sort (0.00s)
+    --- PASS: TestMethodInputValidation/maximum (0.00s)
+    --- PASS: TestMethodInputValidation/negative_version (0.00s)
+    --- PASS: TestMethodInputValidation/overflow_version (0.00s)
+    --- PASS: TestMethodInputValidation/overlong_label (0.00s)
+    --- PASS: TestMethodInputValidation/orphan_connection (0.00s)
+=== RUN   TestEnabledDraftRejected
+--- PASS: TestEnabledDraftRejected (0.00s)
+=== RUN   TestCheckInputValidation
+--- PASS: TestCheckInputValidation (0.00s)
+=== RUN   TestDiagnosticReasonsOrderAndFailClosed
+--- PASS: TestDiagnosticReasonsOrderAndFailClosed (0.00s)
+=== RUN   TestQueryWorkerOptionsAndMockIsolation
+--- PASS: TestQueryWorkerOptionsAndMockIsolation (0.00s)
+=== RUN   TestQueryFamilyBudgetAndRetry
+--- PASS: TestQueryFamilyBudgetAndRetry (0.00s)
+=== RUN   TestQueryPanicBecomesFixedFailure
+--- PASS: TestQueryPanicBecomesFixedFailure (0.00s)
+=== RUN   TestWorkerClientRejectsInvalidInputsBeforeDatabase
+--- PASS: TestWorkerClientRejectsInvalidInputsBeforeDatabase (0.00s)
+=== RUN   TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase
+=== RUN   TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/live
+=== RUN   TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/mock_without_transport
+=== RUN   TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/mock_nil_transport
+=== RUN   TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/mock_multiple_transports
+=== RUN   TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/sandbox_with_transport
+=== RUN   TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/nil_keys
+--- PASS: TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase (0.00s)
+    --- PASS: TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/live (0.00s)
+    --- PASS: TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/mock_without_transport (0.00s)
+    --- PASS: TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/mock_nil_transport (0.00s)
+    --- PASS: TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/mock_multiple_transports (0.00s)
+    --- PASS: TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/sandbox_with_transport (0.00s)
+    --- PASS: TestStripeRuntimeRejectsInvalidConfigurationBeforeDatabase/nil_keys (0.00s)
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift/body_attempt
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift/attempt
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift/tenant
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift/connection
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift/environment
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift/profile
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift/body_account_amount
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift/store
+=== RUN   TestStripeSnapshotRejectsScopeAndBodyDrift/credential_version
+--- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift (0.00s)
+    --- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift/body_attempt (0.00s)
+    --- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift/attempt (0.00s)
+    --- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift/tenant (0.00s)
+    --- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift/connection (0.00s)
+    --- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift/environment (0.00s)
+    --- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift/profile (0.00s)
+    --- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift/body_account_amount (0.00s)
+    --- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift/store (0.00s)
+    --- PASS: TestStripeSnapshotRejectsScopeAndBodyDrift/credential_version (0.00s)
+=== RUN   TestStripeSessionIdentityAndBoundedRateDelay
+--- PASS: TestStripeSessionIdentityAndBoundedRateDelay (0.00s)
+=== RUN   TestStripeSignalRejectsMalformedArgs
+--- PASS: TestStripeSignalRejectsMalformedArgs (0.00s)
+PASS
+ok  	livecommerce/internal/payments	1.355s
+=== RUN   TestRegisterVerifiesBeforeWriteAndSealsVersionOne
+--- PASS: TestRegisterVerifiesBeforeWriteAndSealsVersionOne (0.00s)
+=== RUN   TestRegisterRejectsBeforeAnySQL
+--- PASS: TestRegisterRejectsBeforeAnySQL (0.00s)
+=== RUN   TestRotateSealsNextVersionAndChecksReturn
+--- PASS: TestRotateSealsNextVersionAndChecksReturn (0.00s)
+=== RUN   TestSetWebhookEndpointVersionsAndSeparateCustody
+--- PASS: TestSetWebhookEndpointVersionsAndSeparateCustody (0.00s)
+=== RUN   TestQualifySandboxProbeAndMock
+--- PASS: TestQualifySandboxProbeAndMock (0.00s)
+=== RUN   TestSetMethodPassesEveryField
+--- PASS: TestSetMethodPassesEveryField (0.00s)
+=== RUN   TestSQLErrorVocabularyAndRedaction
+--- PASS: TestSQLErrorVocabularyAndRedaction (0.00s)
+=== RUN   TestOpenValidatesTransportsAndNeedsKeys
+--- PASS: TestOpenValidatesTransportsAndNeedsKeys (0.00s)
+PASS
+ok  	livecommerce/internal/payments/stripeadmin	1.371s
+=== RUN   TestRequestShapeRefusals
+--- PASS: TestRequestShapeRefusals (0.00s)
+=== RUN   TestBusyIsNonBlocking
+--- PASS: TestBusyIsNonBlocking (0.01s)
+=== RUN   TestMaterialAndSignatureOrdering
+2026/09/29 04:32:10 WARN stripe_webhook_rejected code=invalid_signature endpoint=7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+2026/09/29 04:32:10 WARN stripe_webhook_rejected code=invalid_signature endpoint=7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+2026/09/29 04:32:10 WARN stripe_webhook_rejected code=invalid_signature endpoint=7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+2026/09/29 04:32:10 WARN stripe_webhook_rejected code=signing_unavailable endpoint=7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+2026/09/29 04:32:10 WARN stripe_webhook_rejected code=unavailable endpoint=7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+--- PASS: TestMaterialAndSignatureOrdering (0.00s)
+=== RUN   TestNoACKWithoutCommitAndMalformedType
+2026/09/29 04:32:10 WARN stripe_webhook_rejected code=unavailable endpoint=7a1d2c3b-4e5f-4a6b-8c7d-9e0f1a2b3c4d
+--- PASS: TestNoACKWithoutCommitAndMalformedType (0.00s)
+=== RUN   TestLogsCarryNoSecretsBodyOrSignature
+--- PASS: TestLogsCarryNoSecretsBodyOrSignature (0.00s)
+=== RUN   TestNewHandlerRejectsIncompleteInbox
+--- PASS: TestNewHandlerRejectsIncompleteInbox (0.00s)
+PASS
+ok  	livecommerce/internal/payments/stripewebhook	1.364s
+=== RUN   TestStripeSP02Currency
+--- PASS: TestStripeSP02Currency (0.00s)
+=== RUN   TestStripeSP03CreateBody
+=== RUN   TestStripeSP03CreateBody/key_set_and_values
+=== RUN   TestStripeSP03CreateBody/headers_and_resend
+    body_test.go:199: golden create_body_sha256=5e815f37d8e841ec3bdea248cf03e3e713d00ee63a45f814611439fbc9051cca
+--- PASS: TestStripeSP03CreateBody (0.00s)
+    --- PASS: TestStripeSP03CreateBody/key_set_and_values (0.00s)
+    --- PASS: TestStripeSP03CreateBody/headers_and_resend (0.00s)
+=== RUN   TestStripeSP04Classify
+=== RUN   TestStripeSP04Classify/200_create
+=== RUN   TestStripeSP04Classify/200_retrieve
+=== RUN   TestStripeSP04Classify/200_expire
+=== RUN   TestStripeSP04Classify/400_invalid_create
+=== RUN   TestStripeSP04Classify/404_create
+=== RUN   TestStripeSP04Classify/404_retrieve
+=== RUN   TestStripeSP04Classify/400_retrieve
+=== RUN   TestStripeSP04Classify/400_expire_not_open
+=== RUN   TestStripeSP04Classify/400_idempotency_create
+=== RUN   TestStripeSP04Classify/400_unknown_type_create
+=== RUN   TestStripeSP04Classify/400_unparseable_create
+=== RUN   TestStripeSP04Classify/401_create
+=== RUN   TestStripeSP04Classify/403_retrieve
+=== RUN   TestStripeSP04Classify/409_create
+=== RUN   TestStripeSP04Classify/429_create
+=== RUN   TestStripeSP04Classify/500_replayed_create
+=== RUN   TestStripeSP04Classify/503_expire
+=== RUN   TestStripeSP04Classify/302_redirect
+=== RUN   TestStripeSP04Classify/418_unknown
+=== RUN   TestStripeSP04Classify/oversize
+=== RUN   TestStripeSP04Classify/duplicate_key
+=== RUN   TestStripeSP04Classify/malformed_json
+=== RUN   TestStripeSP04Classify/trailing_data
+=== RUN   TestStripeSP04Classify/wrong_object
+=== RUN   TestStripeSP04Classify/livemode_mismatch
+=== RUN   TestStripeSP04Classify/missing_status
+=== RUN   TestStripeSP04Classify/unknown_status
+=== RUN   TestStripeSP04Classify/negative_amount
+=== RUN   TestStripeSP04Classify/fractional_amount
+=== RUN   TestStripeSP04Classify/id_mismatch_retrieve
+=== RUN   TestStripeSP04Classify/create_for_other_attempt
+=== RUN   TestStripeSP04Classify/expire_request_shape
+=== RUN   TestStripeSP04Classify/retrieve_request_shape_and_PI_projection
+=== RUN   TestStripeSP04Classify/cookies_are_never_stored_or_sent
+=== RUN   TestStripeSP04Classify/context_cancel
+=== RUN   TestStripeSP04Classify/TLS_policy
+2026/09/29 04:32:10 http: TLS handshake error from 127.0.0.1:54900: remote error: tls: bad certificate
+=== RUN   TestStripeSP04Classify/VerifyAccount
+=== RUN   TestStripeSP04Classify/FindCheckoutSessions
+=== RUN   TestStripeSP04Classify/FindCheckoutSessions_page_cap_is_uncertain
+=== RUN   TestStripeSP04Classify/observation_projection
+--- PASS: TestStripeSP04Classify (0.32s)
+    --- PASS: TestStripeSP04Classify/200_create (0.01s)
+    --- PASS: TestStripeSP04Classify/200_retrieve (0.01s)
+    --- PASS: TestStripeSP04Classify/200_expire (0.01s)
+    --- PASS: TestStripeSP04Classify/400_invalid_create (0.01s)
+    --- PASS: TestStripeSP04Classify/404_create (0.01s)
+    --- PASS: TestStripeSP04Classify/404_retrieve (0.01s)
+    --- PASS: TestStripeSP04Classify/400_retrieve (0.01s)
+    --- PASS: TestStripeSP04Classify/400_expire_not_open (0.01s)
+    --- PASS: TestStripeSP04Classify/400_idempotency_create (0.01s)
+    --- PASS: TestStripeSP04Classify/400_unknown_type_create (0.01s)
+    --- PASS: TestStripeSP04Classify/400_unparseable_create (0.01s)
+    --- PASS: TestStripeSP04Classify/401_create (0.01s)
+    --- PASS: TestStripeSP04Classify/403_retrieve (0.01s)
+    --- PASS: TestStripeSP04Classify/409_create (0.01s)
+    --- PASS: TestStripeSP04Classify/429_create (0.01s)
+    --- PASS: TestStripeSP04Classify/500_replayed_create (0.01s)
+    --- PASS: TestStripeSP04Classify/503_expire (0.01s)
+    --- PASS: TestStripeSP04Classify/302_redirect (0.01s)
+    --- PASS: TestStripeSP04Classify/418_unknown (0.01s)
+    --- PASS: TestStripeSP04Classify/oversize (0.01s)
+    --- PASS: TestStripeSP04Classify/duplicate_key (0.01s)
+    --- PASS: TestStripeSP04Classify/malformed_json (0.01s)
+    --- PASS: TestStripeSP04Classify/trailing_data (0.01s)
+    --- PASS: TestStripeSP04Classify/wrong_object (0.01s)
+    --- PASS: TestStripeSP04Classify/livemode_mismatch (0.01s)
+    --- PASS: TestStripeSP04Classify/missing_status (0.01s)
+    --- PASS: TestStripeSP04Classify/unknown_status (0.01s)
+    --- PASS: TestStripeSP04Classify/negative_amount (0.01s)
+    --- PASS: TestStripeSP04Classify/fractional_amount (0.01s)
+    --- PASS: TestStripeSP04Classify/id_mismatch_retrieve (0.01s)
+    --- PASS: TestStripeSP04Classify/create_for_other_attempt (0.01s)
+    --- PASS: TestStripeSP04Classify/expire_request_shape (0.01s)
+    --- PASS: TestStripeSP04Classify/retrieve_request_shape_and_PI_projection (0.01s)
+    --- PASS: TestStripeSP04Classify/cookies_are_never_stored_or_sent (0.01s)
+    --- PASS: TestStripeSP04Classify/context_cancel (0.00s)
+    --- PASS: TestStripeSP04Classify/TLS_policy (0.01s)
+    --- PASS: TestStripeSP04Classify/VerifyAccount (0.02s)
+    --- PASS: TestStripeSP04Classify/FindCheckoutSessions (0.03s)
+    --- PASS: TestStripeSP04Classify/FindCheckoutSessions_page_cap_is_uncertain (0.01s)
+    --- PASS: TestStripeSP04Classify/observation_projection (0.00s)
+=== RUN   TestStripeSP01Config
+=== RUN   TestStripeSP01Config/sk_test_sandbox
+=== RUN   TestStripeSP01Config/rk_test_sandbox
+=== RUN   TestStripeSP01Config/sk_test_sandbox_mock
+=== RUN   TestStripeSP01Config/live_key_in_SANDBOX
+=== RUN   TestStripeSP01Config/live_key_on_mock_even_when_approved
+=== RUN   TestStripeSP01Config/test_key_in_LIVE
+=== RUN   TestStripeSP01Config/test_key_with_live_flag
+=== RUN   TestStripeSP01Config/test_key_with_approval_ref
+=== RUN   TestStripeSP01Config/live_key_LIVE_no_approval
+=== RUN   TestStripeSP01Config/live_key_LIVE_flag_without_ref
+=== RUN   TestStripeSP01Config/live_key_LIVE_ref_without_flag
+=== RUN   TestStripeSP01Config/live_key_LIVE_short_ref
+=== RUN   TestStripeSP01Config/live_key_LIVE_bad_ref_chars
+=== RUN   TestStripeSP01Config/live_key_LIVE_approved
+=== RUN   TestStripeSP01Config/PROVIDER_MOCK_env_name
+=== RUN   TestStripeSP01Config/lowercase_env
+=== RUN   TestStripeSP01Config/empty_key
+=== RUN   TestStripeSP01Config/publishable_key
+=== RUN   TestStripeSP01Config/key_with_whitespace
+=== RUN   TestStripeSP01Config/key_trailing_newline
+=== RUN   TestStripeSP01Config/key_too_short
+=== RUN   TestStripeSP01Config/key_bad_chars
+=== RUN   TestStripeSP01Config/bad_account
+=== RUN   TestStripeSP01Config/account_not_acct
+=== RUN   TestStripeSP01Config/WebhookConfig_bounds
+=== RUN   TestStripeSP01Config/redaction
+--- PASS: TestStripeSP01Config (0.00s)
+    --- PASS: TestStripeSP01Config/sk_test_sandbox (0.00s)
+    --- PASS: TestStripeSP01Config/rk_test_sandbox (0.00s)
+    --- PASS: TestStripeSP01Config/sk_test_sandbox_mock (0.00s)
+    --- PASS: TestStripeSP01Config/live_key_in_SANDBOX (0.00s)
+    --- PASS: TestStripeSP01Config/live_key_on_mock_even_when_approved (0.00s)
+    --- PASS: TestStripeSP01Config/test_key_in_LIVE (0.00s)
+    --- PASS: TestStripeSP01Config/test_key_with_live_flag (0.00s)
+    --- PASS: TestStripeSP01Config/test_key_with_approval_ref (0.00s)
+    --- PASS: TestStripeSP01Config/live_key_LIVE_no_approval (0.00s)
+    --- PASS: TestStripeSP01Config/live_key_LIVE_flag_without_ref (0.00s)
+    --- PASS: TestStripeSP01Config/live_key_LIVE_ref_without_flag (0.00s)
+    --- PASS: TestStripeSP01Config/live_key_LIVE_short_ref (0.00s)
+    --- PASS: TestStripeSP01Config/live_key_LIVE_bad_ref_chars (0.00s)
+    --- PASS: TestStripeSP01Config/live_key_LIVE_approved (0.00s)
+    --- PASS: TestStripeSP01Config/PROVIDER_MOCK_env_name (0.00s)
+    --- PASS: TestStripeSP01Config/lowercase_env (0.00s)
+    --- PASS: TestStripeSP01Config/empty_key (0.00s)
+    --- PASS: TestStripeSP01Config/publishable_key (0.00s)
+    --- PASS: TestStripeSP01Config/key_with_whitespace (0.00s)
+    --- PASS: TestStripeSP01Config/key_trailing_newline (0.00s)
+    --- PASS: TestStripeSP01Config/key_too_short (0.00s)
+    --- PASS: TestStripeSP01Config/key_bad_chars (0.00s)
+    --- PASS: TestStripeSP01Config/bad_account (0.00s)
+    --- PASS: TestStripeSP01Config/account_not_acct (0.00s)
+    --- PASS: TestStripeSP01Config/WebhookConfig_bounds (0.00s)
+    --- PASS: TestStripeSP01Config/redaction (0.00s)
+=== RUN   TestStripeSP19LiveRefusal
+--- PASS: TestStripeSP19LiveRefusal (0.00s)
+=== RUN   TestProbeCheckoutSequenceAndGoldenBody
+--- PASS: TestProbeCheckoutSequenceAndGoldenBody (0.00s)
+=== RUN   TestProbeCheckoutRefusals
+--- PASS: TestProbeCheckoutRefusals (0.00s)
+=== RUN   TestStripeSP16Sandbox
+    sandbox_test.go:62: NOT_RUN: SP16 requires STRIPE_SANDBOX=1 with a Stripe test key
+--- SKIP: TestStripeSP16Sandbox (0.00s)
+=== RUN   TestStripeSP05Webhook
+=== RUN   TestStripeSP05Webhook/valid_single_v1
+=== RUN   TestStripeSP05Webhook/v0_and_unknown_scheme_ignored
+=== RUN   TestStripeSP05Webhook/roll_multi_v1_second_matches
+=== RUN   TestStripeSP05Webhook/second_secret_matches
+=== RUN   TestStripeSP05Webhook/unknown_secret
+=== RUN   TestStripeSP05Webhook/missing_t
+=== RUN   TestStripeSP05Webhook/duplicate_t
+=== RUN   TestStripeSP05Webhook/only_v0
+=== RUN   TestStripeSP05Webhook/uppercase_hex
+=== RUN   TestStripeSP05Webhook/short_hex
+=== RUN   TestStripeSP05Webhook/long_hex
+=== RUN   TestStripeSP05Webhook/bad_v1_among_good
+=== RUN   TestStripeSP05Webhook/t_zero
+=== RUN   TestStripeSP05Webhook/t_leading_zero
+=== RUN   TestStripeSP05Webhook/t_over_2_40
+=== RUN   TestStripeSP05Webhook/t_not_decimal
+=== RUN   TestStripeSP05Webhook/now_plus_300_ok
+=== RUN   TestStripeSP05Webhook/now_plus_301_reject
+=== RUN   TestStripeSP05Webhook/now_minus_300_ok
+=== RUN   TestStripeSP05Webhook/now_minus_301_reject
+=== RUN   TestStripeSP05Webhook/body_byte_flip
+=== RUN   TestStripeSP05Webhook/trailing_newline_added
+=== RUN   TestStripeSP05Webhook/space_after_comma
+=== RUN   TestStripeSP05Webhook/element_without_equals
+=== RUN   TestStripeSP05Webhook/empty_key_element
+=== RUN   TestStripeSP05Webhook/sixteen_elements_ok
+=== RUN   TestStripeSP05Webhook/seventeen_elements_reject
+=== RUN   TestStripeSP05Webhook/header_over_2048
+=== RUN   TestStripeSP05Webhook/empty_header
+=== RUN   TestStripeSP05Webhook/malformed_truncated_json
+=== RUN   TestStripeSP05Webhook/malformed_duplicate_key_root
+=== RUN   TestStripeSP05Webhook/malformed_duplicate_key_nested
+=== RUN   TestStripeSP05Webhook/malformed_trailing_data
+=== RUN   TestStripeSP05Webhook/malformed_invalid_utf8
+=== RUN   TestStripeSP05Webhook/malformed_not_event_object
+=== RUN   TestStripeSP05Webhook/malformed_missing_livemode
+=== RUN   TestStripeSP05Webhook/malformed_depth_65
+=== RUN   TestStripeSP05Webhook/malformed_created_string
+=== RUN   TestStripeSP05Webhook/malformed_root_array
+=== RUN   TestStripeSP05Webhook/malformed_empty_body
+=== RUN   TestStripeSP05Webhook/connect_event_account_present
+=== RUN   TestStripeSP05Webhook/probe_session
+=== RUN   TestStripeSP05Webhook/livemode_true_projected_not_decided
+=== RUN   TestStripeSP05Webhook/fresh_Go-signed_cases
+=== RUN   TestStripeSP05Webhook/hmac.Equal_source_guard
+=== RUN   TestStripeSP05Webhook/node_cross-check
+    webhook_test.go:160: stripe-webhook-check: 43 vectors agree (ok=10 malformed=11 signature=22)
+--- PASS: TestStripeSP05Webhook (0.04s)
+    --- PASS: TestStripeSP05Webhook/valid_single_v1 (0.00s)
+    --- PASS: TestStripeSP05Webhook/v0_and_unknown_scheme_ignored (0.00s)
+    --- PASS: TestStripeSP05Webhook/roll_multi_v1_second_matches (0.00s)
+    --- PASS: TestStripeSP05Webhook/second_secret_matches (0.00s)
+    --- PASS: TestStripeSP05Webhook/unknown_secret (0.00s)
+    --- PASS: TestStripeSP05Webhook/missing_t (0.00s)
+    --- PASS: TestStripeSP05Webhook/duplicate_t (0.00s)
+    --- PASS: TestStripeSP05Webhook/only_v0 (0.00s)
+    --- PASS: TestStripeSP05Webhook/uppercase_hex (0.00s)
+    --- PASS: TestStripeSP05Webhook/short_hex (0.00s)
+    --- PASS: TestStripeSP05Webhook/long_hex (0.00s)
+    --- PASS: TestStripeSP05Webhook/bad_v1_among_good (0.00s)
+    --- PASS: TestStripeSP05Webhook/t_zero (0.00s)
+    --- PASS: TestStripeSP05Webhook/t_leading_zero (0.00s)
+    --- PASS: TestStripeSP05Webhook/t_over_2_40 (0.00s)
+    --- PASS: TestStripeSP05Webhook/t_not_decimal (0.00s)
+    --- PASS: TestStripeSP05Webhook/now_plus_300_ok (0.00s)
+    --- PASS: TestStripeSP05Webhook/now_plus_301_reject (0.00s)
+    --- PASS: TestStripeSP05Webhook/now_minus_300_ok (0.00s)
+    --- PASS: TestStripeSP05Webhook/now_minus_301_reject (0.00s)
+    --- PASS: TestStripeSP05Webhook/body_byte_flip (0.00s)
+    --- PASS: TestStripeSP05Webhook/trailing_newline_added (0.00s)
+    --- PASS: TestStripeSP05Webhook/space_after_comma (0.00s)
+    --- PASS: TestStripeSP05Webhook/element_without_equals (0.00s)
+    --- PASS: TestStripeSP05Webhook/empty_key_element (0.00s)
+    --- PASS: TestStripeSP05Webhook/sixteen_elements_ok (0.00s)
+    --- PASS: TestStripeSP05Webhook/seventeen_elements_reject (0.00s)
+    --- PASS: TestStripeSP05Webhook/header_over_2048 (0.00s)
+    --- PASS: TestStripeSP05Webhook/empty_header (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_truncated_json (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_duplicate_key_root (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_duplicate_key_nested (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_trailing_data (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_invalid_utf8 (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_not_event_object (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_missing_livemode (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_depth_65 (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_created_string (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_root_array (0.00s)
+    --- PASS: TestStripeSP05Webhook/malformed_empty_body (0.00s)
+    --- PASS: TestStripeSP05Webhook/connect_event_account_present (0.00s)
+    --- PASS: TestStripeSP05Webhook/probe_session (0.00s)
+    --- PASS: TestStripeSP05Webhook/livemode_true_projected_not_decided (0.00s)
+    --- PASS: TestStripeSP05Webhook/fresh_Go-signed_cases (0.00s)
+    --- PASS: TestStripeSP05Webhook/hmac.Equal_source_guard (0.00s)
+    --- PASS: TestStripeSP05Webhook/node_cross-check (0.04s)
+PASS
+ok  	livecommerce/internal/integrations/psp/stripe	1.704s
+=== RUN   TestFakeStripeIdempotencyAndSignature
+--- PASS: TestFakeStripeIdempotencyAndSignature (0.00s)
+=== RUN   TestFakeStripeCacheAndPreExecutionFaults
+--- PASS: TestFakeStripeCacheAndPreExecutionFaults (0.01s)
+=== RUN   TestFakeStripeAPIKeyIsolation
+--- PASS: TestFakeStripeAPIKeyIsolation (0.01s)
+PASS
+ok  	livecommerce/internal/integrations/psp/stripe/stripetest	1.357s
+=== RUN   TestOwnerFileIsPrivateOneUseAndRejectsSymlink
+--- PASS: TestOwnerFileIsPrivateOneUseAndRejectsSymlink (0.00s)
+=== RUN   TestFixtureConfigRejectsFallbackAndOtherDatabases
+--- PASS: TestFixtureConfigRejectsFallbackAndOtherDatabases (0.00s)
+=== RUN   TestFixtureEmptyDatabaseRejectsPublicTableWithoutSideEffects
+    main_test.go:70: isolated fixture guard REAL_PG NOT_RUN
+--- SKIP: TestFixtureEmptyDatabaseRejectsPublicTableWithoutSideEffects (0.00s)
+PASS
+ok  	livecommerce/cmd/admin-fixture	1.335s
+=== RUN   TestDisabledAccountsReadNoSecrets
+--- PASS: TestDisabledAccountsReadNoSecrets (0.00s)
+=== RUN   TestEnabledAccountsEnvironmentAssemblyStartsNoWorker
+--- PASS: TestEnabledAccountsEnvironmentAssemblyStartsNoWorker (0.00s)
+=== RUN   TestAccountConfigStrictBoundary
+=== RUN   TestAccountConfigStrictBoundary/bad_flag
+=== RUN   TestAccountConfigStrictBoundary/unknown_field
+=== RUN   TestAccountConfigStrictBoundary/trailing_value
+=== RUN   TestAccountConfigStrictBoundary/duplicate_IDs
+=== RUN   TestAccountConfigStrictBoundary/noncanonical_base64
+=== RUN   TestAccountConfigStrictBoundary/wrong_length
+=== RUN   TestAccountConfigStrictBoundary/replay_reused
+=== RUN   TestAccountConfigStrictBoundary/missing_active
+--- PASS: TestAccountConfigStrictBoundary (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/bad_flag (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/unknown_field (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/trailing_value (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/duplicate_IDs (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/noncanonical_base64 (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/wrong_length (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/replay_reused (0.00s)
+    --- PASS: TestAccountConfigStrictBoundary/missing_active (0.00s)
+=== RUN   TestAccountConfigRequiresIdentityAndLiteralLoopbackBeforeSecrets
+--- PASS: TestAccountConfigRequiresIdentityAndLiteralLoopbackBeforeSecrets (0.00s)
+=== RUN   TestBuyerPaymentNestedFlagsReadOnlyWhenEnabled
+--- PASS: TestBuyerPaymentNestedFlagsReadOnlyWhenEnabled (0.00s)
+=== RUN   TestBuyerPaymentConfigUsesHistoricalKeyParserWithoutMerchantHTTP
+--- PASS: TestBuyerPaymentConfigUsesHistoricalKeyParserWithoutMerchantHTTP (0.00s)
+=== RUN   TestBuyerDisabledDoesNotReadCredentials
+--- PASS: TestBuyerDisabledDoesNotReadCredentials (0.00s)
+=== RUN   TestBuyerConfigurationFailClosed
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_CHECKOUT_DATABASE_URLa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_CHECKOUT_DATABASE_URLb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BFF_KEYa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ENABLEDa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ENABLEDb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYc
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLc
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLd
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLe
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_DATABASE_URLa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_DATABASE_URLb
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ISSUER_DATABASE_URLa
+=== RUN   TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ISSUER_DATABASE_URLb
+--- PASS: TestBuyerConfigurationFailClosed (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_CHECKOUT_DATABASE_URLa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_CHECKOUT_DATABASE_URLb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BFF_KEYa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ENABLEDa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ENABLEDb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_BFF_KEYc (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLc (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLd (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_SESSION_TTLe (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_DATABASE_URLa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_DATABASE_URLb (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ISSUER_DATABASE_URLa (0.00s)
+    --- PASS: TestBuyerConfigurationFailClosed/COMMERCE_BUYER_ISSUER_DATABASE_URLb (0.00s)
+=== RUN   TestBuyerMountedBeforePathCleaning
+--- PASS: TestBuyerMountedBeforePathCleaning (0.00s)
+=== RUN   TestClaimsConfigStartupAdmission
+--- PASS: TestClaimsConfigStartupAdmission (0.00s)
+=== RUN   TestIdentityDisabledDoesNotReadAuthorityConfiguration
+--- PASS: TestIdentityDisabledDoesNotReadAuthorityConfiguration (0.00s)
+=== RUN   TestIdentityEnabledConfigurationFailClosed
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_PUBLIC_ORIGIN
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_IDENTITY_DATABASE_URL
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_BFF_KEY
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_OIDC_ISSUER
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_OIDC_CLIENT_ID
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_IDENTITY_PROVIDER_KEY
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_SESSION_TTL
+=== RUN   TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_ONBOARDING_CURRENCIES
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_IDENTITY_ENABLED_true
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_IDENTITY_ENABLED_2
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_1m
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_25h
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_forever
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_BFF_KEY_short
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_BFF_KEY_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_FIXTURE_ENABLED_1
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_ENABLED_true
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_USD,
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_twd
+=== RUN   TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_TWD,_US1
+--- PASS: TestIdentityEnabledConfigurationFailClosed (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_PUBLIC_ORIGIN (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_IDENTITY_DATABASE_URL (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_BFF_KEY (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_OIDC_ISSUER (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_OIDC_CLIENT_ID (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_IDENTITY_PROVIDER_KEY (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_SESSION_TTL (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/missing_COMMERCE_ONBOARDING_CURRENCIES (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_IDENTITY_ENABLED_true (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_IDENTITY_ENABLED_2 (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_1m (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_25h (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_SESSION_TTL_forever (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_BFF_KEY_short (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_BFF_KEY_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_FIXTURE_ENABLED_1 (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_ENABLED_true (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_USD, (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_twd (0.00s)
+    --- PASS: TestIdentityEnabledConfigurationFailClosed/invalid_COMMERCE_ONBOARDING_CURRENCIES_TWD,_US1 (0.00s)
+=== RUN   TestIdentityPublicOriginAndPrivateListener
+--- PASS: TestIdentityPublicOriginAndPrivateListener (0.00s)
+=== RUN   TestMetaAPIDisabledAndPrivateBeforeSecrets
+--- PASS: TestMetaAPIDisabledAndPrivateBeforeSecrets (0.00s)
+=== RUN   TestMetaAPIConfigAndRedaction
+--- PASS: TestMetaAPIConfigAndRedaction (0.00s)
+=== RUN   TestMetaMountedBeforeServeMuxCleaning
+--- PASS: TestMetaMountedBeforeServeMuxCleaning (0.00s)
+=== RUN   TestStripeWebhookDisabledReadsOnlyFlag
+--- PASS: TestStripeWebhookDisabledReadsOnlyFlag (0.00s)
+=== RUN   TestStripeWebhookConfigStrictAndRedacted
+--- PASS: TestStripeWebhookConfigStrictAndRedacted (0.00s)
+=== RUN   TestMountStripeReservesNamespace
+--- PASS: TestMountStripeReservesNamespace (0.00s)
+=== RUN   TestStudioBackendSTU05StartupAdmission
+--- PASS: TestStudioBackendSTU05StartupAdmission (0.00s)
+PASS
+ok  	livecommerce/cmd/api	1.486s
+=== RUN   TestDisabledWorkerReadsOnlyFlag
+--- PASS: TestDisabledWorkerReadsOnlyFlag (0.00s)
+=== RUN   TestWorkerConfigStrictAndRedacted
+--- PASS: TestWorkerConfigStrictAndRedacted (0.00s)
+PASS
+ok  	livecommerce/cmd/expiry-worker	1.368s
+=== RUN   TestMediaWorkerLMW01DisabledReadsOnlyFlag
+--- PASS: TestMediaWorkerLMW01DisabledReadsOnlyFlag (0.00s)
+=== RUN   TestMediaWorkerLMW01ConfigBeforeDatabase
+--- PASS: TestMediaWorkerLMW01ConfigBeforeDatabase (0.00s)
+=== RUN   TestRecoveryReleaseGate
+--- PASS: TestRecoveryReleaseGate (0.03s)
+=== RUN   TestRecoveryReleaseEOFRejects
+--- PASS: TestRecoveryReleaseEOFRejects (0.00s)
+=== RUN   TestRecoveryChildEnvironmentDropsRecoveryDSN
+--- PASS: TestRecoveryChildEnvironmentDropsRecoveryDSN (0.00s)
+=== RUN   TestRecoveryTimelyReadbackKeepsOriginalAttestation
+2026/09/29 04:32:10 WARN media_recovery_witness_pending episode_id=eb96573b-165f-43fb-8601-5de560d55c34
+--- PASS: TestRecoveryTimelyReadbackKeepsOriginalAttestation (0.10s)
+=== RUN   TestRecoveryIncompleteBatchStillSignalsDeadlineMiss
+2026/09/29 04:32:10 ERROR media_recovery_deadline_missed episode_id=e97edfd1-1a2b-4bda-b109-0a7f3008fdce scope_status=unresolved affected_count=-1 persisted=false
+--- PASS: TestRecoveryIncompleteBatchStillSignalsDeadlineMiss (0.10s)
+=== RUN   TestRecoveryFirstLateReadbackCannotCreateProof
+=== RUN   TestRecoveryFirstLateReadbackCannotCreateProof/ROOM
+=== RUN   TestRecoveryFirstLateReadbackCannotCreateProof/QUERY
+--- PASS: TestRecoveryFirstLateReadbackCannotCreateProof (0.00s)
+    --- PASS: TestRecoveryFirstLateReadbackCannotCreateProof/ROOM (0.00s)
+    --- PASS: TestRecoveryFirstLateReadbackCannotCreateProof/QUERY (0.00s)
+PASS
+ok  	livecommerce/cmd/media-worker	1.596s
+=== RUN   TestMetaWorkerDisabledReadsOnlyFlag
+--- PASS: TestMetaWorkerDisabledReadsOnlyFlag (0.00s)
+=== RUN   TestMetaWorkerConfigBoundsAndNoAppSecrets
+--- PASS: TestMetaWorkerConfigBoundsAndNoAppSecrets (0.00s)
+PASS
+ok  	livecommerce/cmd/meta-worker	1.332s
+=== RUN   TestMigrateRejectsInvalidConfig
+2026/09/29 04:32:11 ERROR migrate_invalid_config
+2026/09/29 04:32:11 ERROR migrate_invalid_config
+2026/09/29 04:32:11 ERROR migrate_invalid_config
+2026/09/29 04:32:11 ERROR migrate_invalid_config
+--- PASS: TestMigrateRejectsInvalidConfig (0.00s)
+PASS
+ok  	livecommerce/cmd/migrate	1.342s
+=== RUN   TestDisabledWorkerReadsOnlyFlag
+--- PASS: TestDisabledWorkerReadsOnlyFlag (0.00s)
+=== RUN   TestWorkerConfigStrictAndRedacted
+--- PASS: TestWorkerConfigStrictAndRedacted (0.00s)
+=== RUN   TestStripeFlagOnlyReadWhenWorkerEnabled
+--- PASS: TestStripeFlagOnlyReadWhenWorkerEnabled (0.00s)
+=== RUN   TestStripeFlagStrictAndNoStripeSecretsRead
+--- PASS: TestStripeFlagStrictAndNoStripeSecretsRead (0.00s)
+PASS
+ok  	livecommerce/cmd/payment-worker	1.366s
+=== RUN   TestUsageErrorsAreFixedAndPrintNothing
+--- PASS: TestUsageErrorsAreFixedAndPrintNothing (0.00s)
+=== RUN   TestEnvironmentGatesBeforeAnyConnection
+--- PASS: TestEnvironmentGatesBeforeAnyConnection (0.00s)
+=== RUN   TestValidEnvironmentReachesMaskedDatabaseError
+--- PASS: TestValidEnvironmentReachesMaskedDatabaseError (0.00s)
+PASS
+ok  	livecommerce/cmd/stripe-admin	1.351s

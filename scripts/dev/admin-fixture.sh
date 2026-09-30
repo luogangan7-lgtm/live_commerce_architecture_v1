@@ -29,7 +29,7 @@ docker run -d --pull=never --name "$fixture_name" --label "livecommerce.fixture=
   --memory=512m --cpus=1 --pids-limit=128 --tmpfs /var/lib/postgresql:rw,size=268435456 \
   -e POSTGRES_PASSWORD -e POSTGRES_DB=lc_admin_fixture -p 127.0.0.1::5432 \
   postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280 \
-  -c shared_buffers=32MB -c max_connections=30 >/dev/null
+  -c shared_buffers=32MB -c max_connections=60 >/dev/null
 fixture_owned=1
 # Ignore the socket-only initdb server: it shuts down before the final TCP server.
 for ((attempt=0;attempt<40;attempt++)); do

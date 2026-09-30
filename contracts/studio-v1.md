@@ -116,6 +116,20 @@ media_plan_ready preflight under the existing bounded startup context. No media
 worker/executor pool, registrar role, provider client, keyring or credentials
 are loaded by the API. Default-off construction must not touch this subsystem.
 
+### Amendment G2 (2026-09-29, R1 release-gate ruling G2, `docs/delivery/units/r1-final-rulings.md`)
+
+The flag is split. `COMMERCE_STUDIO_ENABLED=1` mounts only the planning routes (GET/POST base,
+GET/PATCH `/{session_id}`) and enables keyword claims + claim-source; it builds no MediaPlanner and
+does not query `live.media_plan_ready()`. `COMMERCE_STUDIO_MEDIA_ENABLED` (absent/empty/0 or 1;
+1 requires Studio) additionally builds the planner and mounts the two rehearsal routes (and the
+input routes when configured); with media off they are absent (404). `httpapi.Options.Studio`
+carries the planning switch; `Live` non-nil implies it. The GET `/{session_id}` body gains one
+read-only field, `media_enabled` (boolean: whether this API mounts the rehearsal routes); the admin
+Studio hides the rehearsal column and controls when it is false. `Studio` above stays the domain
+projection; `media_enabled` is added by the HTTP layer. R1 deploys STUDIO=1, CLAIMS=1, MEDIA=0
+(preflight P06). Gates: `cmd/api` `TestStudioG2FlagMatrix`, `TestStudioPlanningOnlyG2APIProcess`
+(real binary + PG), KC16/T12 browser gates in planning-only mode, smoke S45.
+
 ## BFF and browser
 
 Only add the six exact method/path shapes to the existing scoped BFF allowlist.

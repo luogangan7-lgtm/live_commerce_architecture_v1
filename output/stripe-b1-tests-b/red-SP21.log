@@ -1,0 +1,22 @@
+# RED proof SP21 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: reference Register skips the VerifyAccount check (ruling 8) before writing
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP21Registrar$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_registrar_test.go:169: claimed account differs from the key's account: want ErrRejected, got <nil>
+    stripe_registrar_test.go:400: NOT_RUN: set STRIPE_SANDBOX=1 with a test STRIPE_SECRET_KEY and STRIPE_ACCOUNT_ID to probe the real sandbox (creates and expires one test session, no charge)
+--- FAIL: TestStripeSP21Registrar (1.85s)
+    --- PASS: TestStripeSP21Registrar/two_stores_two_accounts_register_and_first_rotation_is_exact_version (0.03s)
+    --- PASS: TestStripeSP21Registrar/second_account_per_store_same_account_across_stores_and_cross_store_rebinding_are_rejected (0.01s)
+    --- PASS: TestStripeSP21Registrar/non_owner_principal_is_rejected_everywhere (0.01s)
+    --- FAIL: TestStripeSP21Registrar/register_verifies_the_account_before_any_write (0.00s)
+    --- PASS: TestStripeSP21Registrar/ciphertext_purpose_and_aad_swaps_fail_to_open (0.00s)
+    --- PASS: TestStripeSP21Registrar/rotation_blocks_new_starts_until_requalified_and_historical_attempts_keep_their_version (0.34s)
+    --- PASS: TestStripeSP21Registrar/method_bounds_currency_and_cas (0.01s)
+    --- PASS: TestStripeSP21Registrar/qualification_evidence_formats_mock_and_probe (0.01s)
+    --- PASS: TestStripeSP21Registrar/live_is_refused_by_the_registrar_and_by_sql (0.02s)
+    --- SKIP: TestStripeSP21Registrar/sandbox_probe_against_real_stripe (0.00s)
+FAIL
+FAIL	livecommerce/tests/foundation	2.387s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

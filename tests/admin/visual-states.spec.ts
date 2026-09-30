@@ -1,9 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 
 test("ledger selection caret and scroll surface are authored and active", async ({
   page,
 }) => {
+  await mkdir("output/playwright/ledger-review", { recursive: true });
   await page.goto("/en");
   const input = page.locator(".search-field input");
   await input.fill("Visible selection");
@@ -29,7 +30,7 @@ test("ledger selection caret and scroll surface are authored and active", async 
     focused: true,
   });
   await input.screenshot({
-    path: ".impeccable/review/selection-active.png",
+    path: "output/playwright/ledger-review/selection-active.png",
     caret: "initial",
   });
   await input.press("ArrowRight");
@@ -40,7 +41,7 @@ test("ledger selection caret and scroll surface are authored and active", async 
   }));
   expect(caret).toEqual({ start: 17, end: 17, focused: true });
   await input.screenshot({
-    path: ".impeccable/review/caret-active.png",
+    path: "output/playwright/ledger-review/caret-active.png",
     caret: "initial",
   });
   await input.fill("");
@@ -74,9 +75,9 @@ test("ledger selection caret and scroll surface are authored and active", async 
   }));
   expect(scroll.scrollbarColor).toBe("rgb(113, 134, 158) rgb(237, 242, 247)");
   expect(scroll.scrollbarWidth).toBe("thin");
-  await table.screenshot({ path: ".impeccable/review/scrollbar-active.png" });
+  await table.screenshot({ path: "output/playwright/ledger-review/scrollbar-active.png" });
   await writeFile(
-    ".impeccable/review/active-style-evidence.json",
+    "output/playwright/ledger-review/active-style-evidence.json",
     JSON.stringify({ styles, caret, overflowWidth, scroll }, null, 2),
   );
   // Next retains hidden dev-tool DOM; only visible chrome can cover the UI.

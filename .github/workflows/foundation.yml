@@ -1,7 +1,10 @@
 name: Foundation checks
 
 on:
+  # Branch pushes are covered by their pull_request run; running both doubled
+  # Actions minutes per push (~27 min each, 2026-09-28). main still runs on push.
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -14,7 +17,12 @@ concurrency:
 jobs:
   foundation:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # The full PG suite includes several real 90 s clock gates (MRR/LMR) and ran
+    # past 15 min on a 4-vCPU runner (2026-09-28, run 36409672752: cancelled
+    # at MRR02 with 0 FAIL). The bound must stay above test-local.sh's go test -timeout
+    # (4500 s since the R2 merge, 2026-09-30) plus setup; 90 min bounds a hung run
+    # without cutting a green one.
+    timeout-minutes: 90
     env:
       GOTOOLCHAIN: go1.27.1
       GOFLAGS: -mod=readonly
@@ -22,16 +30,50 @@ jobs:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
+          # tests/foundation/live_media_stop_legacy_test.go builds a pinned
+          # pre-LMR admission binary from git history; the default depth-1
+          # checkout lacks that commit ("pinned pre-LMR Git source unavailable
+          # exit status 128"), so fetch full history.
+          fetch-depth: 0
       - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
         with:
           go-version-file: go.mod
           cache: false
+      - name: No key-shaped secret literals
+        # Fake keys and synthetic DSNs with inline passwords must be split ("sk_" + "test_...",
+        # DSN passwords in a separate const) so secret scanners never see a
+        # key-shaped literal (GitGuardian false positives 2026-09-28/29). Real keys never belong here.
+        # The shared webhook vector file (Go + Node cross-check, values named *_not_real_*) is exempt.
+        run: |
+          if git grep -nE '(sk|rk|pk)_(test|live)_[A-Za-z0-9]{8,}|whsec_[A-Za-z0-9]{8,}|EAA[A-Za-z0-9]{40,}|postgres(ql)?://[A-Za-z0-9_.-]+:[^@"$ {%]+@|postgres(ql)?://[A-Za-z0-9_.-]+:" *\+ *"[^"]*@' -- ':!*.md' ':!pnpm-lock.yaml' ':!tests/payments/stripe-webhook-vectors.json'; then
+            echo "key-shaped literal found; split fake keys or remove real ones" >&2; exit 1
+          fi
+      - name: Dependency map is current
+        # docs/engineering/dependency-map.md is generated from `go list`; a stale map
+        # means a package/import changed without regenerating it (PROCESS.md §5).
+        run: bash scripts/dev/depmap.sh --check
+      - name: Package docs and gate map are current
+        # Every Go package needs a comment with "owns" and "never" (PROCESS.md §5), and every
+        # test-local.sh mode/admin spec must be documented and run by a gate (docs/delivery/GATES.md).
+        run: |
+          bash scripts/dev/check-pkgdocs.sh
+          bash scripts/dev/check-gates.sh
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24" # package.json engines: >=24 <25 (--experimental-strip-types)
+      - name: Node unit suites (storefront, i18n)
+        # No Docker/PG needed. tests/media/r04-input-runner.test.mjs needs a pinned LiveKit binary and is
+        # reported NOT_RUN here (never PASS); see docs/delivery/GATES.md "Node unit suites".
+        run: bash scripts/dev/test-node.sh
       - name: Download pinned test image
         run: docker pull postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280
       - name: Real PostgreSQL, race detector and vet
         run: bash scripts/dev/test-local.sh
       - name: Reachable vulnerability scan
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        # v1.1.4 bundles golang.org/x/tools v0.29.0, whose SSA builder panicked
+        # ("unexpected expr: *ast.KeyValueExpr") on this Go 1.27.1 module in CI
+        # job 108912135515 after all 725 tests passed. v1.8.0 is current.
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
 # Local scripts have been replayed separately. This workflow is NOT a CI pass
 # until a real GitHub run supplies an execution receipt; no remote is configured.

@@ -1,0 +1,44 @@
+# File: deploy/postgres/logins.tsv
+# Purpose: single source of truth for every PostgreSQL LOGIN a deployed process uses: which
+#   business authority (NOLOGIN role created by migrations/) it joins, the exact GRANT shape the
+#   repo tests prove, and which service/env var consumes its DSN (deploy-design §9.3).
+# Format: TAB-separated, 6 columns, '#' lines are comments:
+#   login  authority  grant  set  consumer(service:ENV_VAR | -)  proof(test file:line with that grant)
+#   grant: in_role       = GRANT <authority> TO <login>      (== CREATE ROLE ... IN ROLE; INHERIT, SET TRUE)
+#          inherit_noset = GRANT <authority> TO <login> WITH INHERIT TRUE, SET FALSE
+#   set:   core  = provisioned now; media = documentation only (media-worker is MOCK-only and not
+#          deployed, internal/integrations/livekit/worker_env.go:174) until T08 makes it deployable.
+# Runs as/in: read by deploy/postgres/provision-logins.sh (inside the provision-logins container,
+#   mounted at /provision/logins.tsv), deploy/scripts/secrets-init.sh (pw_/dsn_ file names and
+#   DSN application_name = service), deploy/scripts/preflight.sh (P03/P04 cross-checks).
+# Reads env / secrets: none (this file holds names only; passwords are /run/secrets/pw_<login>).
+# Used by: see above; consumers' DSN files are /run/secrets/dsn_<login> -> <ENV_VAR>_FILE in compose.yml.
+# Status: DESIGN; verified by smoke S13 (17 logins authenticate, membership matrix matches, ruling 19
+#   runtime River privileges). The Stripe/claims/registrar logins were added for R1 (stripe-psp-v1 §12,
+#   meta-claims-intake-v1 §4.1/§7); lc_stripe_registrar and lc_meta_registrar are OPERATOR-ONLY:
+#   only the `ops` one-shot jobs stripe-admin / meta-admin use them, never a long-running service.
+# Change rules: a new login needs (1) a row here, (2) pw_/dsn_ rows in deploy/secrets.manifest.tsv,
+#   (3) the secret + *_FILE wiring in deploy/compose.yml, (4) a test proving its grant shape.
+#   internal/platform/platform.go validatePoolAuthority rejects a login in more than one authority.
+lc_api_runtime	commerce_runtime	in_role	core	api:DATABASE_URL	tests/foundation/foundation_integration_test.go:110
+lc_api_identity	commerce_identity	in_role	core	api:COMMERCE_IDENTITY_DATABASE_URL	tests/foundation/buyer_capability_test.go:384
+lc_api_buyer_issuer	commerce_buyer_issuer	in_role	core	api:COMMERCE_BUYER_ISSUER_DATABASE_URL	tests/foundation/buyer_capability_test.go:384
+lc_api_buyer	commerce_buyer_runtime	in_role	core	api:COMMERCE_BUYER_DATABASE_URL	tests/foundation/buyer_capability_test.go:384
+lc_api_checkout	commerce_checkout_runtime	in_role	core	api:COMMERCE_CHECKOUT_DATABASE_URL	tests/foundation/buyer_checkout_test.go:49
+lc_api_hosted	commerce_hosted_runtime	inherit_noset	core	api:COMMERCE_HOSTED_DATABASE_URL	tests/foundation/hosted_payment_test.go:111-112
+lc_api_meta_ingress	commerce_meta_ingress	inherit_noset	core	api:COMMERCE_META_INGRESS_DATABASE_URL	tests/foundation/meta_inbox_test.go:47-48
+lc_expiry_worker	commerce_worker	in_role	core	expiry-worker:COMMERCE_EXPIRY_WORKER_DATABASE_URL	tests/foundation/external_operation_test.go:112
+lc_payment_sandbox	commerce_worker	in_role	core	payment-worker-sandbox:COMMERCE_PAYMENT_WORKER_DATABASE_URL	tests/foundation/external_operation_test.go:112
+lc_payment_live	commerce_worker	in_role	core	payment-worker-live:COMMERCE_PAYMENT_WORKER_DATABASE_URL	tests/foundation/external_operation_test.go:112
+lc_meta_worker	commerce_meta_worker	inherit_noset	core	meta-worker:COMMERCE_META_WORKER_DATABASE_URL	tests/foundation/meta_runtime_process_test.go:221(miRole)
+lc_meta_consumer	commerce_meta_consumer	inherit_noset	core	meta-worker:COMMERCE_META_CONSUMER_DATABASE_URL	tests/foundation/meta_runtime_process_test.go:222(miRole)
+lc_api_stripe_ingress	commerce_stripe_ingress	inherit_noset	core	api:COMMERCE_STRIPE_INGRESS_DATABASE_URL	tests/foundation/stripe_authority_test.go:32(saIngressRole)+meta_inbox_test.go:47-48(miRole grant shape)
+lc_claims_intake	commerce_claims_intake	inherit_noset	core	claims-worker:COMMERCE_CLAIMS_INTAKE_DATABASE_URL	tests/foundation/meta_claims_intake_flow_test.go:155(miRole)
+lc_claims_worker	commerce_worker	in_role	core	claims-worker:COMMERCE_WORKER_DATABASE_URL	tests/foundation/external_operation_test.go:112
+lc_retention_job	commerce_retention_job	inherit_noset	core	claims-worker:COMMERCE_RETENTION_JOB_DATABASE_URL	tests/foundation/claims_retention_test.go(CRP02/CRP09: retention job login shape)
+lc_stripe_registrar	commerce_payment_registrar	inherit_noset	core	stripe-admin:COMMERCE_STRIPE_REGISTRAR_DATABASE_URL	tests/foundation/stripe_authority_test.go:33(saRegistrarRole)
+lc_meta_registrar	commerce_meta_registrar	inherit_noset	core	meta-admin:COMMERCE_META_REGISTRAR_DATABASE_URL	tests/foundation/meta_inbox_test.go:47-48(miRole grant shape)
+lc_ads_worker	commerce_worker	in_role	core	ads-worker:COMMERCE_ADS_WORKER_DATABASE_URL	tests/foundation/external_operation_test.go:112
+lc_media_worker	commerce_media_worker	inherit_noset	media	-	tests/foundation/studio_process_test.go:89-94
+lc_media_executor	commerce_media_executor	inherit_noset	media	-	tests/foundation/studio_process_test.go:89-94
+lc_media_recovery	commerce_media_recovery	inherit_noset	media	-	tests/foundation/live_media_recovery_test.go:33-36

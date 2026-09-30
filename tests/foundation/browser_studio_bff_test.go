@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -191,6 +192,10 @@ func TestBrowserStudioBFFRealChain(t *testing.T) {
 	fixture.Dir = filepath.Join(root, "apps/admin")
 	fixture.Env = browserEnvironment(map[string]string{"NODE_ENV": "development", "COMMERCE_IDENTITY_ENABLED": "0", "COMMERCE_FIXTURE_ENABLED": "1", "COMMERCE_FIXTURE_ALLOWED": "1", "COMMERCE_FIXTURE_TOKEN": h.lp.token, "COMMERCE_FIXTURE_STORE_ID": h.lp.f.storeA1, "COMMERCE_API_ORIGIN": api.URL})
 	fixture.Stdout, fixture.Stderr = fixtureLog, fixtureLog
+	// F6: `next dev` forks a next-server child that outlives its parent and holds the port; own a process
+	// group and signal the whole group (this PID's group only, never by port or name).
+	fixture.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	fixture.Cancel = func() error { return syscall.Kill(-fixture.Process.Pid, syscall.SIGKILL) }
 	if err := fixture.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -199,13 +204,14 @@ func TestBrowserStudioBFFRealChain(t *testing.T) {
 	var stopFixtureOnce sync.Once
 	stopFixture := func() {
 		stopFixtureOnce.Do(func() {
-			_ = fixture.Process.Signal(os.Interrupt)
+			_ = syscall.Kill(-fixture.Process.Pid, syscall.SIGINT)
 			select {
 			case <-fixtureDone:
 			case <-time.After(5 * time.Second):
-				_ = fixture.Process.Kill()
+				_ = syscall.Kill(-fixture.Process.Pid, syscall.SIGKILL)
 				<-fixtureDone
 			}
+			stopProcessGroup(t, fixture.Process.Pid) // leaked next-server children hold the port
 		})
 	}
 	t.Cleanup(stopFixture)

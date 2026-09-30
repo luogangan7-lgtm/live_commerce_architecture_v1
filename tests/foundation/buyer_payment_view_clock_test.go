@@ -53,7 +53,7 @@ func TestBuyerPaymentViewFinalDatabaseClock(t *testing.T) {
 			case "capability":
 				err = h.f.owner.QueryRow(ctx, `UPDATE buyer.capability_sessions SET expires_at=clock_timestamp()+interval '450 milliseconds' WHERE id=$1 RETURNING expires_at`, h.cap.Scope.SessionID).Scan(&expiry)
 			case "qualification":
-				err = h.f.owner.QueryRow(ctx, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '450 milliseconds' WHERE id=$1 RETURNING expires_at`, h.proof).Scan(&expiry)
+				err = qualUpdateScan(ctx, h.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '450 milliseconds' WHERE id=$1 RETURNING expires_at`, []any{h.proof}, &expiry)
 			case "page":
 				err = h.f.owner.QueryRow(ctx, `UPDATE checkout.hosted_payment_pages SET expires_at=clock_timestamp()+interval '450 milliseconds' WHERE attempt_id=(SELECT id FROM checkout.payment_attempts WHERE order_id=$1) RETURNING expires_at`, h.hold.OrderID).Scan(&expiry)
 			}

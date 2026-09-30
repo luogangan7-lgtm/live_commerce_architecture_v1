@@ -1,0 +1,62 @@
+/* Customers, customer detail, finance, billing pages and the standing banner (customers-billing-v1 §5, U1).
+   Reuses orders.css / order-actions.css classes and tokens; only what they cannot express lives here:
+   the six-column customers table (orders.css fixes widths for five), the search field, the inline sections of the
+   customer detail, the finance totals row, and the one banner shape. No new colour tokens. */
+.customers-search { flex: 1 1 280px; max-width: 420px; }
+.customers-search input, .customers-page input[type="date"] { height: 45px; min-height: 45px; box-sizing: border-box; color: var(--ink); font-size: 14px; }
+.customers-table > thead > tr > th, .customers-table > tbody > tr > td { width: auto; }
+.orders-table.customers-table > thead > tr > th:nth-child(n), .orders-table.customers-table > tbody > tr > td:nth-child(n) { width: auto; }
+.orders-table.customers-table > thead > tr > th:first-child, .orders-table.customers-table > tbody > tr > td:first-child { width: 24%; }
+.customers-table td small { display: block; margin-top: 2px; color: var(--orders-muted); font-size: 12px; }
+.customers-table td:first-child a { display: inline-grid; gap: 1px; min-height: 40px; align-content: center; color: var(--ink); text-decoration: none; }
+.customers-table td:first-child a:hover, .customers-table td:first-child a:focus-visible { color: var(--focus); text-decoration: underline; }
+.customers-table td:first-child .orders-badge { margin-left: 8px; }
+.customers-table td .orders-badge { min-height: 26px; padding: 4px 9px; margin: 2px 6px 2px 0; white-space: nowrap; }
+.customers-back { display: inline-block; margin: 0 0 12px 6px; color: var(--focus); }
+.customers-section { padding: 22px 26px; margin: 0 0 16px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.customers-section h2 { font-size: 16px; margin: 0 0 14px; }
+.customers-section .orders-facts { margin-bottom: 0; }
+.customers-section button, .customers-section .orders-export { min-height: 40px; padding: 8px 16px; border: 1px solid #cbd6e2; border-radius: 5px; background: #fff; color: var(--ink); font-weight: 600; }
+.customers-section button:hover:not(:disabled) { background: #edf3f8; color: var(--ink); }
+.customers-section button.primary { background: var(--teal); border-color: var(--teal); color: #fff; }
+.customers-section button.primary:hover:not(:disabled) { background: #1c6554; color: #fff; }
+.customers-section button.danger { border-color: #975016; color: #975016; }
+.customers-section button.danger.primary { background: #975016; color: #fff; }
+.customers-consent { display: grid; gap: 12px; margin: 0 0 14px; padding: 0; list-style: none; }
+.customers-consent li { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.customers-consent li > span:first-child { flex: 1 1 260px; }
+.customers-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.customers-erased { margin: 0 0 12px; padding: 12px 14px; border-radius: 5px; background: #e8eef5; color: #455c74; }
+.customers-page .orders-actions-table { min-width: 0; }
+.customers-page .orders-actions-table > tbody > tr > th { height: auto; width: 42%; padding: 9px 10px; border-bottom: 1px solid var(--line); background: none; color: var(--ink); font-size: 13px; font-weight: 600; text-align: left; vertical-align: top; }
+.customers-page .orders-actions-table td:last-child, .customers-page .orders-actions-table th:last-child { text-align: left; }
+.customers-page .orders-actions-table td { white-space: normal; overflow-wrap: anywhere; }
+.customers-page dialog p { margin: 8px 0; }
+.customers-finance-controls input { min-width: 170px; }
+.customers-finance-table tfoot td { font-weight: 700; border-top: 2px solid var(--line); }
+.customers-page .customers-finance-table td:nth-child(n+4), .customers-page .customers-finance-table th:nth-child(n+4) { text-align: right; }
+.customers-page .customers-finance-table { min-width: 620px; }
+.billing-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0 0 14px; padding: 12px 16px; border-radius: 6px; font-size: 14px; font-weight: 600; }
+.billing-banner a { color: inherit; text-decoration: underline; white-space: nowrap; }
+.billing-plans { display: grid; gap: 10px; margin: 0 0 14px; padding: 0; list-style: none; }
+.billing-plans li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 5px; }
+.billing-plans strong { display: block; }
+
+@media (max-width: 680px) {
+  .customers-search { flex-basis: 100%; max-width: none; }
+  .customers-section { padding: 18px 15px; }
+  .orders-table.customers-table > tbody > tr:not(.orders-detail-row) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .orders-table.customers-table > tbody > tr > td:nth-child(n) { grid-column: auto; display: grid; gap: 4px; justify-content: start; width: 100%; }
+  .orders-table.customers-table > tbody > tr > td:first-child { grid-column: 1 / -1; display: flex; justify-content: space-between; }
+  .orders-table.customers-table > tbody > tr > td:nth-child(4) { order: 1; }
+  .orders-table.customers-table > tbody > tr > td:nth-child(6) { order: 2; }
+  .orders-table.customers-table > tbody > tr > td:nth-child(5) { order: 3; grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 4px 8px; }
+  .orders-table.customers-table > tbody > tr > td:nth-child(5)::before { flex-basis: 100%; }
+  .orders-table.customers-table > tbody > tr > td:nth-child(n)::before { display: block; }
+  .orders-table.customers-table > tbody > tr > td:first-child::before { display: none; }
+  .customers-page .customers-section button, .customers-page .customers-section .orders-export { min-height: 44px; }
+  .customers-page .customers-finance-table { min-width: 0; }
+  .customers-page .customers-finance-table th, .customers-page .customers-finance-table td { padding: 8px 6px; font-size: 12px; }
+  .customers-page .customers-finance-table th:nth-child(-n+3):not(:first-child), .customers-page .customers-finance-table td:nth-child(-n+3):not(:first-child) { display: none; }
+  .customers-page .customers-finance-table td:nth-child(n+4) { white-space: nowrap; }
+}

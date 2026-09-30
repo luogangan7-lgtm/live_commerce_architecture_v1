@@ -281,3 +281,10 @@ or cleanup of permanent dedupe with River jobs.
   only after measured PG admission/queue capacity requires an approved ADR.
 - No automatic asset transfer in v1; design a verified cutover and late-event
   policy when a real merchant transfer workflow is required.
+
+## Amendment by claims-retention-purge-v1 (integrator, 2026-09-30, U08 merge)
+
+Recorded from `contracts/claims-retention-purge-v1.md` §6 (FROZEN 2026-09-30); that file is the source of the rows.
+
+- Clause 5 (ruling B27): function grants gain EXECUTE `meta_inbox.lock_purgeable(uuid)` to the NOLOGIN
+  `commerce_retention_writer` only; "no execution grant for any login role" still holds.

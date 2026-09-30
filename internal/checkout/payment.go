@@ -139,6 +139,7 @@ func (s *PaymentStarter) startPaymentTx(ctx context.Context, tx pgx.Tx, scope bu
 		out.AttemptID != attemptID || out.JobID != job.Job.ID {
 		return PaymentResult{}, false, command.ErrConflict
 	}
+	command.InLocalTime(&out) // JSON-built result; same location as replays
 	return out, false, nil
 }
 
@@ -175,6 +176,7 @@ func readPaymentReceipt(ctx context.Context, tx pgx.Tx, scope buyer.Scope, key s
 	if err = json.Unmarshal(response, &out); err != nil || !validPaymentResult(out, orderID) {
 		return PaymentResult{}, false, command.ErrConflict
 	}
+	command.InLocalTime(&out) // replay equals the first result on any host TZ
 	return out, true, nil
 }
 

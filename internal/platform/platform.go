@@ -1,5 +1,8 @@
-// Package platform provides the narrow HTTP and database foundation shared by
-// the API process. Domain packages receive a scoped transaction, never a pool.
+// Package platform owns the narrow HTTP and database foundation shared by the API process: pool
+// opening per DB role, WithScope (token to tenant/store scope inside one transaction) and permission
+// checks. Domain packages receive a scoped transaction, never a pool. It never holds a domain rule,
+// never widens a role's grants, and never accepts a tenant or store id that did not come from a
+// verified session.
 package platform
 
 import (
@@ -198,8 +201,17 @@ func validatePoolAuthority(ctx context.Context, pool *pgxpool.Pool, authority st
 	var mediaRegistrar, mediaRegistrarUsage, mediaRegistrarSet, mediaWriter, mediaWriterUsage, mediaWriterSet bool
 	var mediaWorker, mediaWorkerUsage, mediaWorkerSet, mediaExecutor, mediaExecutorUsage, mediaExecutorSet bool
 	var mediaRecovery, mediaRecoveryUsage, mediaRecoverySet bool
+	var stripeIngress, stripeIngressUsage, stripeIngressSet, stripeRegistrar, stripeRegistrarUsage, stripeRegistrarSet, stripeRegistryWriter, integrationWriter bool
 	err := pool.QueryRow(ctx, `
-		SELECT session_user=current_user, session_user=$1, r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication,
+		SELECT coalesce(pg_has_role(session_user, to_regrole('commerce_stripe_ingress'), 'MEMBER'),false),
+		       coalesce(pg_has_role(session_user, to_regrole('commerce_stripe_ingress'), 'USAGE'),false),
+		       coalesce(pg_has_role(session_user, to_regrole('commerce_stripe_ingress'), 'SET'),false),
+		       coalesce(pg_has_role(session_user, to_regrole('commerce_payment_registrar'), 'MEMBER'),false),
+		       coalesce(pg_has_role(session_user, to_regrole('commerce_payment_registrar'), 'USAGE'),false),
+		       coalesce(pg_has_role(session_user, to_regrole('commerce_payment_registrar'), 'SET'),false),
+		       coalesce(pg_has_role(session_user, to_regrole('commerce_payment_registry_writer'), 'MEMBER'),false),
+		       coalesce(pg_has_role(session_user, to_regrole('commerce_integration_writer'), 'MEMBER'),false),
+		       session_user=current_user, session_user=$1, r.rolsuper, r.rolbypassrls, r.rolcreaterole, r.rolcreatedb, r.rolreplication,
 		       (EXISTS (
 			   SELECT 1 FROM pg_namespace n
 			   WHERE n.nspowner = r.oid
@@ -266,10 +278,38 @@ func validatePoolAuthority(ctx context.Context, pool *pgxpool.Pool, authority st
 				   WHERE p.proowner=candidate.oid AND n.nspname NOT IN ('pg_catalog','information_schema')
 			       ))
 			     AND (pg_has_role(session_user, candidate.oid, 'SET') OR pg_has_role(session_user, candidate.oid, 'USAGE'))
+		       ) OR EXISTS (
+			   -- ADMIN OPTION lets the login GRANT any authority it is a member of
+			   -- to itself or others; no runtime pool, old or new, may hold it.
+			   SELECT 1 FROM pg_auth_members am WHERE am.member=r.oid AND am.admin_option
 		       )
 		FROM pg_roles r WHERE r.rolname = session_user`, pool.Config().ConnConfig.User).
-		Scan(&sameLogin, &dsnUserMatch, &superuser, &bypassRLS, &roleAdmin, &databaseCreator, &replication, &objectOwner, &runtimeMember, &authMember, &identityMember, &buyerRuntimeMember, &buyerIssuerMember, &workerMember, &checkoutMember, &hostedMember, &hostedUsage, &hostedSet, &checkoutWriterMember, &metaIngress, &metaRegistrar, &metaCurator, &metaConsumer, &metaWriter, &metaUsage, &metaSet, &consumerUsage, &consumerSet, &metaWorker, &metaWorkerUsage, &metaWorkerSet, &mediaRegistrar, &mediaRegistrarUsage, &mediaRegistrarSet, &mediaWriter, &mediaWriterUsage, &mediaWriterSet, &mediaWorker, &mediaWorkerUsage, &mediaWorkerSet, &mediaExecutor, &mediaExecutorUsage, &mediaExecutorSet, &mediaRecovery, &mediaRecoveryUsage, &mediaRecoverySet, &systemAuthority, &canReachPrivileged)
+		Scan(&stripeIngress, &stripeIngressUsage, &stripeIngressSet, &stripeRegistrar, &stripeRegistrarUsage, &stripeRegistrarSet, &stripeRegistryWriter, &integrationWriter, &sameLogin, &dsnUserMatch, &superuser, &bypassRLS, &roleAdmin, &databaseCreator, &replication, &objectOwner, &runtimeMember, &authMember, &identityMember, &buyerRuntimeMember, &buyerIssuerMember, &workerMember, &checkoutMember, &hostedMember, &hostedUsage, &hostedSet, &checkoutWriterMember, &metaIngress, &metaRegistrar, &metaCurator, &metaConsumer, &metaWriter, &metaUsage, &metaSet, &consumerUsage, &consumerSet, &metaWorker, &metaWorkerUsage, &metaWorkerSet, &mediaRegistrar, &mediaRegistrarUsage, &mediaRegistrarSet, &mediaWriter, &mediaWriterUsage, &mediaWriterSet, &mediaWorker, &mediaWorkerUsage, &mediaWorkerSet, &mediaExecutor, &mediaExecutorUsage, &mediaExecutorSet, &mediaRecovery, &mediaRecoveryUsage, &mediaRecoverySet, &systemAuthority, &canReachPrivileged)
 	if err != nil {
+		return fmt.Errorf("validate runtime role: %w", err)
+	}
+	// The claims intake authority (meta-claims-intake-v1 §4.1) has its own probe so that every
+	// other authority also rejects a login that can reach commerce_claims_intake, and the intake
+	// login rejects every other authority (both directions, via the exactly-one rule below).
+	var claimsIntake, claimsIntakeUsage, claimsIntakeSet bool
+	if err := pool.QueryRow(ctx, `SELECT coalesce(pg_has_role(session_user, to_regrole('commerce_claims_intake'), 'MEMBER'),false),
+		coalesce(pg_has_role(session_user, to_regrole('commerce_claims_intake'), 'USAGE'),false),
+		coalesce(pg_has_role(session_user, to_regrole('commerce_claims_intake'), 'SET'),false)`).
+		Scan(&claimsIntake, &claimsIntakeUsage, &claimsIntakeSet); err != nil {
+		return fmt.Errorf("validate runtime role: %w", err)
+	}
+	// U08 retention logins (claims-retention-purge-v1 §4): same shape as the claims intake probe. The two roles
+	// join the exactly-one rule below, so every other authority rejects a login that can reach either of them,
+	// and both reject any other authority. Their definer owner commerce_retention_writer owns functions and is
+	// therefore already caught by the canReachPrivileged owner scan.
+	var retentionJob, retentionJobUsage, retentionJobSet, retentionOperator, retentionOperatorUsage, retentionOperatorSet bool
+	if err := pool.QueryRow(ctx, `SELECT coalesce(pg_has_role(session_user, to_regrole('commerce_retention_job'), 'MEMBER'),false),
+		coalesce(pg_has_role(session_user, to_regrole('commerce_retention_job'), 'USAGE'),false),
+		coalesce(pg_has_role(session_user, to_regrole('commerce_retention_job'), 'SET'),false),
+		coalesce(pg_has_role(session_user, to_regrole('commerce_retention_operator'), 'MEMBER'),false),
+		coalesce(pg_has_role(session_user, to_regrole('commerce_retention_operator'), 'USAGE'),false),
+		coalesce(pg_has_role(session_user, to_regrole('commerce_retention_operator'), 'SET'),false)`).
+		Scan(&retentionJob, &retentionJobUsage, &retentionJobSet, &retentionOperator, &retentionOperatorUsage, &retentionOperatorSet); err != nil {
 		return fmt.Errorf("validate runtime role: %w", err)
 	}
 	// Exactly one authority, including indirect grants. Checking only the desired
@@ -279,7 +319,9 @@ func validatePoolAuthority(ctx context.Context, pool *pgxpool.Pool, authority st
 		"checkout_runtime": checkoutMember, "meta_ingress": metaIngress,
 		"meta_registrar": metaRegistrar, "meta_curator": metaCurator, "meta_consumer": metaConsumer,
 		"meta_worker": metaWorker, "media_registrar": mediaRegistrar,
-		"media_worker": mediaWorker, "media_executor": mediaExecutor, "media_recovery": mediaRecovery}
+		"media_worker": mediaWorker, "media_executor": mediaExecutor, "media_recovery": mediaRecovery,
+		"stripe_ingress": stripeIngress, "stripe_registrar": stripeRegistrar, "claims_intake": claimsIntake,
+		"retention_job": retentionJob, "retention_operator": retentionOperator}
 	roleCount := 0
 	for _, member := range memberships {
 		if member {
@@ -301,6 +343,15 @@ func validatePoolAuthority(ctx context.Context, pool *pgxpool.Pool, authority st
 	if authority == "meta_worker" {
 		roleValid = roleValid && metaWorkerUsage && !metaWorkerSet && !systemAuthority
 	}
+	if authority == "claims_intake" {
+		roleValid = roleValid && claimsIntakeUsage && !claimsIntakeSet && !systemAuthority
+	}
+	if authority == "retention_job" {
+		roleValid = roleValid && retentionJobUsage && !retentionJobSet && !systemAuthority
+	}
+	if authority == "retention_operator" {
+		roleValid = roleValid && retentionOperatorUsage && !retentionOperatorSet && !systemAuthority
+	}
 	if authority == "media_worker" {
 		roleValid = roleValid && mediaWorkerUsage && !mediaWorkerSet && !systemAuthority
 	}
@@ -310,12 +361,21 @@ func validatePoolAuthority(ctx context.Context, pool *pgxpool.Pool, authority st
 	if authority == "media_recovery" {
 		roleValid = roleValid && mediaRecoveryUsage && !mediaRecoverySet && !systemAuthority
 	}
+	if authority == "stripe_ingress" {
+		roleValid = roleValid && stripeIngressUsage && !stripeIngressSet && !systemAuthority && !stripeRegistryWriter && !integrationWriter
+	}
+	if authority == "stripe_registrar" {
+		roleValid = roleValid && stripeRegistrarUsage && !stripeRegistrarSet && !systemAuthority && !stripeRegistryWriter && !integrationWriter
+	}
 	// A privileged login cannot launder its authority with startup SET ROLE:
 	// RESET ROLE would recover the session_user's capabilities after admission.
 	// Inherited owner authority also permits DDL without SET ROLE; SET FALSE is
 	// not a safe substitute for withholding that membership.
 	if !sameLogin || !dsnUserMatch || superuser || bypassRLS || roleAdmin || databaseCreator || replication || objectOwner || !roleValid || authMember || checkoutWriterMember || metaWriter || mediaRegistrarUsage || mediaRegistrarSet || mediaWriter || mediaWriterUsage || mediaWriterSet || canReachPrivileged {
 		return errors.New("unsafe runtime database role")
+	}
+	if err := validateStripeAuthority(ctx, pool, authority); err != nil {
+		return err
 	}
 	// The registrar owns no objects; inspect effective direct, PUBLIC and
 	// reachable-role EXECUTE on its two fixed definer functions as well.

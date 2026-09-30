@@ -74,7 +74,12 @@ func RunCommand(ctx context.Context, tx pgx.Tx, s Scope, operation, key string, 
 		if !bytes.Equal(previousHash, digest[:]) {
 			return command.ErrConflict
 		}
-		return json.Unmarshal(previousJSON, result)
+		if err = json.Unmarshal(previousJSON, result); err != nil {
+			return err
+		}
+		// Replay must equal the first result, which was scanned by pgx in time.Local.
+		command.InLocalTime(result)
+		return nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return err

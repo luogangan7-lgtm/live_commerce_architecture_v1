@@ -72,6 +72,7 @@ type QueryWorker struct {
 	options QueryWorkerOptions
 	core    core.Service
 	jobs    *river.Client[pgx.Tx]
+	stripe  *StripeRuntime
 }
 
 var _ river.Worker[paymentQueryArgs] = (*QueryWorker)(nil)
@@ -129,6 +130,13 @@ func (w *QueryWorker) Work(ctx context.Context, job *river.Job[paymentQueryArgs]
 	}
 	if !validQueryOperation(op) {
 		return river.JobCancel(errPaymentQueryFamily)
+	}
+	if op.Provider == "stripe" {
+		// A disabled Stripe worker leaves the job and operation untouched for an enabled worker.
+		if w.stripe == nil {
+			return river.JobSnooze(5 * time.Second)
+		}
+		return w.stripeStep(ctx, id, op)
 	}
 	if op.ResultCode == "payment_query_budget_exhausted" && op.LeaseUntil == nil {
 		return river.JobCancel(errPaymentQueryBudget)
@@ -205,8 +213,9 @@ func queryRetryDelay(configured time.Duration, source string) time.Duration {
 }
 
 func validQueryOperation(op queryOperation) bool {
-	return op.ActorKind == "BUYER_PAYMENT_QUERY" && op.Provider == "payuni" &&
-		op.Purpose == "transactional" && op.Action == "payuni.query"
+	return op.ActorKind == "BUYER_PAYMENT_QUERY" && op.Purpose == "transactional" &&
+		((op.Provider == "payuni" && op.Action == "payuni.query") ||
+			(op.Provider == "stripe" && op.Action == "stripe.checkout_session"))
 }
 
 func terminalQueryState(state string) bool {

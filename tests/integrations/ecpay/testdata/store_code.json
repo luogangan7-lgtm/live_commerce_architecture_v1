@@ -1,0 +1,22 @@
+[
+ {"kind":"cvs_711","code":"123456","ok":true},
+ {"kind":"cvs_711","code":"000123","ok":true},
+ {"kind":"cvs_711","code":"12345","ok":false},
+ {"kind":"cvs_711","code":"1234567","ok":false},
+ {"kind":"cvs_711","code":"12345a","ok":false},
+ {"kind":"cvs_711","code":"","ok":false},
+ {"kind":"cvs_familymart","code":"006598","ok":true},
+ {"kind":"cvs_familymart","code":"6598","ok":false},
+ {"kind":"cvs_familymart","code":"0065980","ok":false},
+ {"kind":"cvs_okmart","code":"1328","ok":true},
+ {"kind":"cvs_okmart","code":"0328","ok":true},
+ {"kind":"cvs_okmart","code":"13280","ok":false},
+ {"kind":"cvs_okmart","code":"132","ok":false},
+ {"kind":"cvs_hilife","code":"123","ok":true},
+ {"kind":"cvs_hilife","code":"2001","ok":true},
+ {"kind":"cvs_hilife","code":"12345678","ok":true},
+ {"kind":"cvs_hilife","code":"12","ok":false},
+ {"kind":"cvs_hilife","code":"123456789","ok":false},
+ {"kind":"cvs_hilife","code":"12a","ok":false},
+ {"kind":"cvs_bogus","code":"123456","ok":false}
+]

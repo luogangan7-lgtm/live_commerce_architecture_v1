@@ -1,0 +1,5 @@
+# COMPILE against the FROZEN signatures (scratch overlay = worktree + stubs of exactly the briefs' signatures), tests commit 87cfd8f
+# command: GOTOOLCHAIN=go1.27.1 go vet ./tests/foundation ./cmd/... ./internal/integrations/psp/stripe/... ; gofmt -l tests cmd internal
+vet exit 0
+# gofmt -l on this unit's write paths (tests cmd internal/integrations/psp/stripe): clean
+# (overlay files internal/checkout/{hosted,payment_view}.go are scratch-patched copies, not this unit's files)

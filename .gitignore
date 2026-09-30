@@ -13,3 +13,5 @@ node_modules/
 test-results/
 playwright-report/
 output/playwright/
+# Agent-tool isolated worktrees (Claude Code workflows); never repository content.
+.claude/worktrees/

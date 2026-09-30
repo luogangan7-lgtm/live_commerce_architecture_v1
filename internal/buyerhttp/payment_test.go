@@ -101,3 +101,70 @@ func TestBuyerPaymentPrepareStrictProjection(t *testing.T) {
 		t.Fatalf("handoff body reached service: %d %s", status, code)
 	}
 }
+
+func TestBuyerPaymentSignalRoutesAreKeylessPostOnlyAndFailClosed(t *testing.T) {
+	path := "/v1/buyer/orders/" + paymentOrderID + "/payment"
+	for suffix, kind := range map[string]routeKind{"/refresh": paymentRefreshRoute, "/cancel": paymentCancelRoute} {
+		selected := matchRoute(path + suffix)
+		if selected.kind != kind || selected.id != paymentOrderID || !isPaymentRoute(kind) || !isKeylessPaymentRoute(kind) {
+			t.Fatalf("signal route drift: %s", path+suffix)
+		}
+		for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
+			if allowed(kind, method) {
+				t.Fatalf("signal route accepted %s", method)
+			}
+		}
+		if !allowed(kind, http.MethodPost) {
+			t.Fatal("signal route rejects POST")
+		}
+		if matchRoute(path+suffix+"/").kind != unknownRoute || matchRoute(path+suffix+"/x").kind != unknownRoute {
+			t.Fatal("malformed signal route accepted")
+		}
+		request := httptest.NewRequest(http.MethodPost, path+suffix, nil)
+		request.Header.Set("Idempotency-Key", "valid-key-1")
+		if _, ok := keyFor(request, true, false); ok {
+			t.Fatal("signal accepted a replay key")
+		}
+		h := &handler{}
+		err := h.dispatch(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path+suffix, nil),
+			selected, paymentOrderID, testBuyerKey, "")
+		if status, code := classify(err); status != http.StatusNotFound || code != "not_found" {
+			t.Fatalf("disabled payment service exposed %s: %d %s", suffix, status, code)
+		}
+		h.payment = &checkout.HostedPaymentStarter{} // PAYUNi-only service: Stripe signals are absent
+		err = h.dispatch(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path+suffix, strings.NewReader("{}")),
+			selected, paymentOrderID, testBuyerKey, "")
+		if status, code := classify(err); status != http.StatusUnprocessableEntity || code != "invalid_request" {
+			t.Fatalf("signal body reached service: %d %s", status, code)
+		}
+		err = h.dispatch(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, path+suffix, nil),
+			selected, paymentOrderID, testBuyerKey, "")
+		if status, code := classify(err); status != http.StatusNotFound || code != "not_found" {
+			t.Fatalf("service without Stripe answered %s: %d %s", suffix, status, code)
+		}
+	}
+}
+
+func TestBuyerPaymentKeylessPathsAreNonRetryableAndPrepareAdmitsStripe(t *testing.T) {
+	path := "/v1/buyer/orders/" + paymentOrderID + "/payment"
+	for suffix, want := range map[string]bool{"/handoff": true, "/refresh": true, "/cancel": true,
+		"": false, "/prepare": false} {
+		if keylessPaymentPath(path+suffix) != want {
+			t.Fatalf("non-retryable classification of %q drifted", suffix)
+		}
+	}
+	if keylessPaymentPath("/v1/buyer/cart/payment/refresh") || keylessPaymentPath("/v1/buyer/session") {
+		t.Fatal("non-order path classified as keyless payment")
+	}
+	for code, want := range map[string]bool{"payuni_credit": true, "stripe_checkout": true,
+		"stripe": false, "": false, "payuni_installment": false, "Stripe_Checkout": false} {
+		if admittedPaymentMethod(code) != want {
+			t.Fatalf("prepare method allow-list drifted for %q", code)
+		}
+	}
+	var in paymentPrepareInput
+	body := `{"method_code":"stripe_checkout","method_version":1,"locale":"en"}`
+	if err := json.Unmarshal([]byte(body), &in); err != nil || in.MethodCode != "stripe_checkout" {
+		t.Fatalf("stripe prepare body rejected: %v", err)
+	}
+}

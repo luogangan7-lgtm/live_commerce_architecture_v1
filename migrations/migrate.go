@@ -1,4 +1,10 @@
-// Package migrations applies forward-only, checksummed business migrations.
+// Package migrations owns applying the embedded, forward-only, checksummed business SQL migrations
+// (0001-) and the River schema, under one advisory lock, then exiting.
+//
+// It never edits or reorders an applied migration (a checksum mismatch stops the run), never runs
+// down-migrations, and never runs from the API or a worker: cmd/migrate is its only production
+// caller. Numbering: the current release branch owns 0060-0079; only the integrator merges
+// migrations.
 package migrations
 
 import (
@@ -149,6 +155,16 @@ func Apply(ctx context.Context, pool *pgxpool.Pool) error {
 		return err
 	}
 	if err = applyVersions(ctx, postTx, postVersions); err != nil {
+		return err
+	}
+	// Stripe webhook ingress inserts payment signal jobs through River
+	// JobInsertFastMany: ON CONFLICT (unique_key) DO UPDATE SET kind=EXCLUDED.kind
+	// needs column UPDATE(kind) at executor start (same reason as commerce_runtime
+	// above). Column-level only: integration.guard_payment_job_family rejects any
+	// kind/args/queue/identity change, and no other column, DELETE or TRUNCATE is
+	// granted. Kept here (not in post_river/0012) so it is checksum-safe for
+	// databases that already applied 0012 and is re-asserted on every Apply.
+	if _, err = postTx.Exec(ctx, `GRANT UPDATE(kind) ON river_payment.river_job TO commerce_stripe_ingress`); err != nil {
 		return err
 	}
 	// Reapply only lifecycle grants after future upstream additions, and only in

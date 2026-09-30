@@ -1,3 +1,4 @@
+// GET /api/auth/callback → POST /v1/identity/login/complete (internal/identityhttp); OIDC only, 404 without COMMERCE_OIDC_ISSUER (U4).
 import {
   authConfig,
   authFailure,
@@ -37,7 +38,7 @@ function callbackQuery(request: Request) {
 }
 
 export async function GET(request: Request) {
-  if (!authConfig) return disabledResponse();
+  if (!authConfig?.issuer) return disabledResponse(); // U4: no OIDC issuer => no callback
   const binding = loginBinding(request);
   const locale = binding?.locale ?? "zh-CN";
   const query = callbackQuery(request);
@@ -70,7 +71,7 @@ export async function GET(request: Request) {
 }
 
 const unsupported = () =>
-  authConfig
+  authConfig?.issuer
     ? new Response(null, {
         status: 405,
         headers: { Allow: "GET", "Cache-Control": "no-store" },

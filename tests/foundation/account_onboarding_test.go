@@ -11,7 +11,7 @@ import (
 	"livecommerce/internal/platform"
 )
 
-func TestNewInitialStoreOwnerGetsAccountSettingsButNotExecution(t *testing.T) {
+func TestNewInitialStoreOwnerGetsAccountSettingsAndExecution(t *testing.T) {
 	s, _, _ := identityFixture(t)
 	f := fixture(t)
 	ctx := context.Background()
@@ -29,10 +29,12 @@ func TestNewInitialStoreOwnerGetsAccountSettingsButNotExecution(t *testing.T) {
 		AND permission LIKE 'integration:%' ORDER BY permission)`, store.TenantID, store.StoreID, session.PrincipalID).Scan(&grants); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(grants, []string{"integration:manage", "integration:read"}) {
+	// Ruling 24 (spec change of stripe-refund-v1 §12): 0065 also grants integration:execute, which the
+	// claim-source definer requires with live:manage so the owner can bind their own posts.
+	if !slices.Equal(grants, []string{"integration:execute", "integration:manage", "integration:read"}) {
 		t.Fatalf("new owner integration grants = %v", grants)
 	}
-	for _, permission := range []string{"integration:read", "integration:manage"} {
+	for _, permission := range []string{"integration:read", "integration:manage", "integration:execute"} {
 		if err := platform.WithScope(ctx, f.runtime, session.Token, store.StoreID, permission,
 			func(_ pgx.Tx, scope platform.Scope) error {
 				if scope.TenantID != store.TenantID || scope.PrincipalID != session.PrincipalID {
@@ -42,10 +44,6 @@ func TestNewInitialStoreOwnerGetsAccountSettingsButNotExecution(t *testing.T) {
 			}); err != nil {
 			t.Fatalf("new owner missing %s: %v", permission, err)
 		}
-	}
-	if err := platform.WithScope(ctx, f.runtime, session.Token, store.StoreID, "integration:execute",
-		func(pgx.Tx, platform.Scope) error { return nil }); !errors.Is(err, platform.ErrForbidden) {
-		t.Fatalf("new owner gained execute: %v", err)
 	}
 
 	var owner string
@@ -66,10 +64,10 @@ func TestNewInitialStoreOwnerGetsAccountSettingsButNotExecution(t *testing.T) {
 
 	if _, err := f.owner.Exec(ctx, `DELETE FROM identity.store_grants
 		WHERE tenant_id=$1::uuid AND store_id=$2::uuid AND principal_id=$3::uuid
-		AND permission IN ('integration:read','integration:manage')`, store.TenantID, store.StoreID, session.PrincipalID); err != nil {
+		AND permission IN ('integration:read','integration:manage','integration:execute')`, store.TenantID, store.StoreID, session.PrincipalID); err != nil {
 		t.Fatal(err)
 	}
-	for _, permission := range []string{"integration:read", "integration:manage"} {
+	for _, permission := range []string{"integration:read", "integration:manage", "integration:execute"} {
 		if err := platform.WithScope(ctx, f.runtime, session.Token, store.StoreID, permission,
 			func(pgx.Tx, platform.Scope) error { return nil }); !errors.Is(err, platform.ErrForbidden) {
 			t.Fatalf("revoked %s remained usable: %v", permission, err)

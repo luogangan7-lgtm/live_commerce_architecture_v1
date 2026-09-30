@@ -1,0 +1,35 @@
+# RED: cmd SP15 no-PG halves against FROZEN-signature stubs only (no behavior), tests commit 87cfd8f
+# command: GOTOOLCHAIN=go1.27.1 go test -count=1 -run SP15 ./cmd/api ./cmd/payment-worker ./cmd/stripe-admin (scratch overlay, stubs)
+--- FAIL: TestStripeSP15Process (0.00s)
+    --- FAIL: TestStripeSP15Process/disabled_webhook_reads_only_its_flag_and_opens_nothing (0.00s)
+        stripe_sp15_test.go:68: flag "": err=<nil> read=[]
+    --- FAIL: TestStripeSP15Process/enabled_webhook_needs_a_private_listener_before_reading_secrets (0.00s)
+        stripe_sp15_test.go:85: 0.0.0.0:8080 accepted: <nil>
+    --- FAIL: TestStripeSP15Process/webhook_config_every_negative_and_no_leak (0.00s)
+        stripe_sp15_test.go:132: profile_live accepted: <nil>
+    --- FAIL: TestStripeSP15Process/api_never_reads_stripe_secrets_and_webhook_reads_only_its_own_names (0.00s)
+        stripe_sp15_test.go:175: build with unreachable ingress database: <nil>
+    --- FAIL: TestStripeSP15Process/buyer_payment_stripe_flag_is_nested_and_never_reads_stripe_secrets (0.00s)
+        stripe_sp15_test.go:233: live_profile accepted or leaked: <nil>
+    --- FAIL: TestStripeSP15Process/mountStripe_reserves_the_whole_namespace (0.00s)
+        stripe_sp15_test.go:251: /v1/stripe reached "fallback", not the Stripe handler (alias bypass)
+FAIL
+FAIL	livecommerce/cmd/api	0.863s
+--- FAIL: TestStripeSP15Process (0.00s)
+    --- FAIL: TestStripeSP15Process/stripe_flag_is_read_only_when_enabled_and_is_strict (0.00s)
+        stripe_sp15_test.go:61: stripe enabled on SANDBOX: {enabled:true dsn:postgres://secret@localhost/test profile:SANDBOX concurrency:4 keys:0x948491d1e00 stripe:false} <nil>
+FAIL
+FAIL	livecommerce/cmd/payment-worker	0.863s
+--- FAIL: TestStripeSP15Process (0.02s)
+    --- FAIL: TestStripeSP15Process/no_args_and_unknown_subcommand_read_nothing_and_print_nothing (0.00s)
+        stripe_sp15_test.go:98: none: err=<nil> reads=[] stdout=""
+    --- FAIL: TestStripeSP15Process/each_subcommand_reads_only_its_own_variables_and_leaks_nothing (0.00s)
+        stripe_sp15_test.go:110: register: run succeeded without a database
+    --- FAIL: TestStripeSP15Process/live_is_refused_by_the_cli (0.00s)
+        stripe_sp15_test.go:160: register with a live key: <nil> ""
+    --- FAIL: TestStripeSP15Process/bad_flags_and_ids_fail_without_leaking (0.00s)
+        stripe_sp15_test.go:196: missing_tenant: err=<nil> stdout=""
+FAIL
+FAIL	livecommerce/cmd/stripe-admin	0.595s
+FAIL
+# exit: non-zero expected (stubs implement no behavior)

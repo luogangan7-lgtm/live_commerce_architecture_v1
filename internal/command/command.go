@@ -71,6 +71,8 @@ func Run(ctx context.Context, tx pgx.Tx, scope platform.Scope, operation, key st
 		if err = json.Unmarshal(previousJSON, result); err != nil {
 			return fmt.Errorf("decode saved command: %w", err)
 		}
+		// Replay must equal the first result, which was scanned by pgx in time.Local.
+		InLocalTime(result)
 		return nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {

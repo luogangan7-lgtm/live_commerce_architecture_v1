@@ -310,7 +310,7 @@ func validDestinationInput(in DestinationInput) bool {
 }
 
 func validDestinationKind(kind string) bool {
-	return kind == "home" || kind == "cvs_711" || kind == "cvs_familymart"
+	return kind == "home" || isCVSKind(kind)
 }
 
 func validCountry(country string) bool {
@@ -347,4 +347,10 @@ func validDestinationPhone(phone string) bool {
 		}
 	}
 	return digits >= 6 && digits <= 20
+}
+
+// isCVSKind reports the four Taiwan convenience-store pickup kinds (taiwan-cvs-logistics-v1 TD6); the SQL twin is the widened
+// destination_snapshots kind CHECK of migrations/0072.
+func isCVSKind(kind string) bool {
+	return kind == "cvs_711" || kind == "cvs_familymart" || kind == "cvs_hilife" || kind == "cvs_okmart"
 }

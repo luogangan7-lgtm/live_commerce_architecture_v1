@@ -146,13 +146,13 @@ func TestBuyerPaymentViewCandidateDrift(t *testing.T) {
 		},
 		"credential-rotated": hpRotateFixtureHead,
 		"qualification-revoked": func(t *testing.T, h hpHarness) {
-			mustExec(t, h.f.owner, `UPDATE payments.account_qualifications SET revoked_at=clock_timestamp() WHERE id=$1`, h.proof)
+			qualExec(t, h.f.owner, `UPDATE payments.account_qualifications SET revoked_at=clock_timestamp() WHERE id=$1`, h.proof)
 		},
 		"qualification-expired": func(t *testing.T, h hpHarness) {
-			mustExec(t, h.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp() WHERE id=$1`, h.proof)
+			qualExec(t, h.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp() WHERE id=$1`, h.proof)
 		},
 		"qualification-future": func(t *testing.T, h hpHarness) {
-			mustExec(t, h.f.owner, `UPDATE payments.account_qualifications SET observed_at=clock_timestamp()+interval '1 minute' WHERE id=$1`, h.proof)
+			qualExec(t, h.f.owner, `UPDATE payments.account_qualifications SET observed_at=clock_timestamp()+interval '1 minute' WHERE id=$1`, h.proof)
 		},
 		"hold-expired": func(t *testing.T, h hpHarness) { bcDue(t, h.bcHarness, h.hold) },
 		"hold-generation": func(t *testing.T, h hpHarness) {

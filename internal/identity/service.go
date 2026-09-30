@@ -1,5 +1,16 @@
-// Package identity owns merchant login and first-store bootstrap. Its dedicated
-// database pool is an authentication authority, never a business runtime pool.
+// Package identity owns merchant login and first-store bootstrap: the OIDC login (Service) and the
+// email + password + emailed-code login (Passwords, contracts/merchant-password-auth-v1.md). Its
+// dedicated database pool is an authentication authority (role commerce_identity, EXECUTE on the
+// identity.* definers only), never a business runtime pool.
+//
+// It never links an OIDC principal and a password principal by email (PD9), never retries or
+// queues mail (one send per challenge, PD7/I06), never persists a plaintext code or password, and
+// never takes a tenant or store id from the client (I01).
+//
+// External hosts: api.pwnedpasswords.com (Have I Been Pwned k-anonymity range API, sign-up and
+// reset only, so a breached password is refused without ever sending the password or its full
+// hash; fail-open on any error, ruling Q3). The SMTP host is dialled only by internal/mail, via the
+// Mailer seam. The OIDC issuer is dialled only by internal/oidclogin.
 package identity
 
 import (
@@ -40,6 +51,9 @@ type Provider interface {
 }
 
 type Policy struct {
+	// PasswordLogin relaxes New so a nil Provider is accepted (ruling R-4, A8): OIDC becomes optional
+	// when password login is enabled; Start/Complete then return ErrDisabled.
+	PasswordLogin     bool
 	ProviderKey       string
 	SessionTTL        time.Duration
 	OnboardingEnabled bool
@@ -56,7 +70,8 @@ type Service struct {
 // New requires an OpenIdentityPool result. Production wiring remains fail-closed
 // until its IdP/registration policy is provisioned; there is no fixture fallback.
 func New(pool *pgxpool.Pool, provider Provider, policy Policy) (*Service, error) {
-	if pool == nil || provider == nil || len(policy.ProviderKey) == 0 || len(policy.ProviderKey) > 128 || policy.SessionTTL < 5*time.Minute || policy.SessionTTL > 24*time.Hour {
+	oidcConfigured := provider != nil
+	if pool == nil || (!oidcConfigured && !policy.PasswordLogin) || (oidcConfigured && len(policy.ProviderKey) == 0) || len(policy.ProviderKey) > 128 || policy.SessionTTL < 5*time.Minute || policy.SessionTTL > 24*time.Hour {
 		return nil, ErrInvalid
 	}
 	currencies := make(map[string]bool)
@@ -82,6 +97,9 @@ type Flow struct {
 }
 
 func (s *Service) Start(ctx context.Context) (Flow, error) {
+	if s.provider == nil { // password-only deployment (A8): the OIDC routes stay mounted but disabled
+		return Flow{}, ErrDisabled
+	}
 	state, binding, nonce, verifier := randomToken(), randomToken(), randomToken(), randomToken()
 	authURL, err := s.provider.AuthorizationURL(state, nonce, verifier)
 	if err != nil {
@@ -106,6 +124,9 @@ type Session struct {
 }
 
 func (s *Service) Complete(ctx context.Context, state, binding, code string) (Session, error) {
+	if s.provider == nil {
+		return Session{}, ErrDisabled
+	}
 	if !validToken(state) || !validToken(binding) || len(code) == 0 || len(code) > 4096 {
 		return Session{}, ErrUnauthorized
 	}
@@ -196,9 +217,15 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 }
 
 func (s *Service) transaction(ctx context.Context, fn func(context.Context, pgx.Tx) error) error {
+	return withTx(ctx, s.pool, fn)
+}
+
+// withTx runs fn in one bounded transaction (5 s statement/lock/idle limits) on the identity pool.
+// Shared by Service (OIDC) and Passwords so both keep the same fail-fast limits.
+func withTx(ctx context.Context, pool *pgxpool.Pool, fn func(context.Context, pgx.Tx) error) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	tx, err := s.pool.Begin(ctx)
+	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}

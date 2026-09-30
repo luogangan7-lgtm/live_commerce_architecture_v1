@@ -1,5 +1,11 @@
-// Package live owns the merchant-scoped planning draft aggregate. Callers pass
-// a transaction from platform.WithScope and roll it back on every error.
+// Package live owns the merchant-scoped live-planning aggregate: drafts, the Studio projection,
+// rehearsal and media plans, the LiveKit Egress execution, stop and recovery workers, and browser-
+// input preparation. Callers pass a transaction from platform.WithScope and roll it back on every
+// error.
+//
+// It never serves HTTP (internal/httpapi does), never talks to LiveKit except through
+// internal/integrations/livekit, and never lets a worker decide authorization: plans are admitted in
+// SQL and workers execute leased, fenced jobs.
 package live
 
 import (

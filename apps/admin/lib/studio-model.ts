@@ -38,6 +38,9 @@ export type StudioDetail = {
   prepared: Prepared | null;
   attempt: Attempt | null;
   can_manage: boolean;
+  // false when the API runs planning-only Studio (COMMERCE_STUDIO_MEDIA_ENABLED=0, R1 ruling G2):
+  // the rehearsal routes are not mounted, so the UI hides every media control.
+  media_enabled: boolean;
 };
 export type StudioPage = { items: Draft[]; next_cursor: string };
 export type StudioReceipt = { session_id: string; attempt_id: string; state: string };
@@ -121,9 +124,9 @@ export function parseStudioInput(value: unknown): StudioInput | null {
   return row as StudioInput;
 }
 export function parseStudioDetail(value: unknown, requestedID: string): StudioDetail {
-  const row = exact(value, ["draft", "prepared", "attempt", "can_manage"]);
+  const row = exact(value, ["draft", "prepared", "attempt", "can_manage", "media_enabled"]);
   const draft = parseDraft(row.draft);
-  if (draft.session_id !== requestedID || typeof row.can_manage !== "boolean" ||
+  if (draft.session_id !== requestedID || typeof row.can_manage !== "boolean" || typeof row.media_enabled !== "boolean" ||
     (row.prepared !== null && row.attempt !== null)) throw new Error("invalid_studio_response");
   const prepared = parseStudioInputPrepared(row.prepared);
   if (prepared && prepared.session_version !== draft.version) throw new Error("invalid_studio_response");
@@ -139,7 +142,7 @@ export function parseStudioDetail(value: unknown, requestedID: string): StudioDe
       typeof item.escalated !== "boolean" || !date(item.updated_at)) throw new Error("invalid_studio_response");
     attempt = { ...item, destinations: destinations(item.destinations) } as Attempt;
   }
-  return { draft, prepared, attempt, can_manage: row.can_manage };
+  return { draft, prepared, attempt, can_manage: row.can_manage, media_enabled: row.media_enabled };
 }
 export function parseStudioReceipt(value: unknown, sessionID: string): StudioReceipt {
   const row = exact(value, ["session_id", "attempt_id", "state"]);

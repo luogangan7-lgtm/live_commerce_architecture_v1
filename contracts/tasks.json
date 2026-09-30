@@ -222,8 +222,18 @@
       "backend_code_baseline": "7f9ed8c",
       "prior_baseline_evidence": "docs/implementation/2026-09-20-catalog-inventory-acceptance.md",
       "global_gate_pass": false,
-      "completed_additions": ["绑定租户店铺与筛选的有界keyset分页", "同事务catalog:read与inventory:read账簿投影", "zh-CN/zh-TW/en商品库存页面及浏览器真实API验收"],
-      "remaining": ["公开市场报价入口/政策管理界面与折扣", "商品媒体/属性矩阵", "真实身份提供商和生产商店开通", "完整交易和付款状态迁移", "全产品页面和浏览器验收"],
+      "completed_additions": [
+        "绑定租户店铺与筛选的有界keyset分页",
+        "同事务catalog:read与inventory:read账簿投影",
+        "zh-CN/zh-TW/en商品库存页面及浏览器真实API验收"
+      ],
+      "remaining": [
+        "公开市场报价入口/政策管理界面与折扣",
+        "商品媒体/属性矩阵",
+        "真实身份提供商和生产商店开通",
+        "完整交易和付款状态迁移",
+        "全产品页面和浏览器验收"
+      ],
       "cart_quote_evidence": "docs/implementation/2026-09-20-cart-quote-acceptance.md",
       "latest_go_aggregate": "2026-09-20基线e2cbfd5真实隔离PG 96顶层测试0失败0跳过，race/vet及独立cart-quote审查通过；不是checkout或全产品通过"
     }
@@ -266,7 +276,13 @@
       "source_baseline": "442cbe7",
       "global_gate_pass": false,
       "design_record": "docs/implementation/2026-09-25-buyer-history-design-record.md",
-      "remaining": ["按订单托管支付页与真实沙箱回调", "过期买家身份安全恢复", "可信超商选店", "商家分享与真实公开路由联合验收", "真实DNS/TLS部署及完整产品门禁"]
+      "remaining": [
+        "按订单托管支付页与真实沙箱回调",
+        "过期买家身份安全恢复",
+        "可信超商选店",
+        "商家分享与真实公开路由联合验收",
+        "真实DNS/TLS部署及完整产品门禁"
+      ]
     }
   },
   {
@@ -575,7 +591,10 @@
       "restart_recovery_source_commit": "86b641a",
       "restart_recovery_root_tested_commit": "b99a2d1",
       "restart_recovery_historical_failed_commit": "dfe844a",
-      "restart_recovery_historical_full_failures": ["TestLegacyRuntimeIsolationPopulatedUpgrade", "TestLiveMediaStopLMR05RealCrashAndCommitAckLoss"],
+      "restart_recovery_historical_full_failures": [
+        "TestLegacyRuntimeIsolationPopulatedUpgrade",
+        "TestLiveMediaStopLMR05RealCrashAndCommitAckLoss"
+      ],
       "restart_recovery_current_full": "Root b99a2d1 actual exit0,696PASS0FAIL0SKIP,foundation1132.853s,race/vet; log /Volumes/data/output/full-integrated-b99a2d1-root-20260927.log SHA25630a36b7e9277653205ca270a171f7705a40d9dcfdfaf4f1ac2474f86bf11a2c6",
       "restart_recovery_lri_followup": "ec5c25c merged da37adc: root --legacy-isolation exit0,10PASS,31.288s; historical full result unchanged",
       "restart_recovery_lmr_followup": "Owner approved old LMR05 wait35s to90s, safety unchanged; test3eb66c2 independently reviewed; root7b7da24 --live-media-stop exit0,53PASS,245.464s; new full b99a2d1 also PASS, named case58.82s. MRR90 remains separate proof.",
@@ -679,7 +698,7 @@
       "internal/cart/**",
       "tests/claims/**"
     ],
-    "status": "NOT_STARTED",
+    "status": "IN_PROGRESS_SLICE_PASS",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
     "completion_dimensions": {
@@ -688,7 +707,8 @@
       "real_pg": "NOT_RUN",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "NOT_RUN"
+      "independent_review": "NOT_RUN",
+      "r1_2026_09_29": "Claims core + Meta comment intake (0064) + claim-source (Studio bind post) + one private reply per comment: REAL_PG MCI/KC gates PASS, BROWSER --browser-live-claims PASS; Meta LIVE (Page token, App Review) NOT_RUN owner prerequisite. Evidence output/r1-integration/release-gate/run3/FINAL-table.txt"
     },
     "gate_semantics": "本任务贡献相应门禁的切片；全局门禁最终独立运行。外部资格阻塞不阻止明确标记mock的下游本地开发。"
   },
@@ -719,7 +739,7 @@
       "internal/integrations/psp/**",
       "tests/orders/**"
     ],
-    "status": "IN_PROGRESS",
+    "status": "IN_PROGRESS_SLICE_PASS",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
     "completion_dimensions": {
@@ -728,7 +748,8 @@
       "real_pg": "PASS_BOUNDED_REGRESSION_433_TOP_LEVEL_TESTS_AT_e6f052f",
       "provider_sandbox": "NOT_RUN",
       "provider_live": "NOT_RUN",
-      "independent_review": "PASS_BOUNDED_INTERNAL_AND_PAYMENT_RUNTIME_SIGNED_MOCK"
+      "independent_review": "PASS_BOUNDED_INTERNAL_AND_PAYMENT_RUNTIME_SIGNED_MOCK",
+      "r1_2026_09_29": "Stripe per-store Checkout (0061) + refunds (0062) + buyer card UI: REAL_PG SP/RF gates PASS; SANDBOX SP16/RF10/SP21 + BROWSER SP18 card 4242/decline/3DS on real Stripe test mode PASS; LIVE NOT_RUN (owner activation). PAYUNi unchanged. Evidence output/r1-integration/release-gate/run3/FINAL-table.txt"
     },
     "evidence": "Latest bounded runtime: docs/implementation/2026-09-25-payment-worker-acceptance.md; source/tests e6f052f; full433 PASS/0FAIL/0SKIP actual PG18/race/vet215.448s; buyer Node55 and actual browser11cases. Earlier per-slice evidence retained below; this is not real PSP or complete G03/G05 acceptance.",
     "delivery_prerequisite": {
@@ -928,7 +949,7 @@
       "tests/e2e/commerce/**",
       "evidence/commerce/**"
     ],
-    "status": "NOT_STARTED",
+    "status": "IN_PROGRESS_SLICE_PASS",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
     "completion_dimensions": {
@@ -937,7 +958,8 @@
       "real_pg": "NOT_RUN",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "NOT_RUN"
+      "independent_review": "NOT_RUN",
+      "r1_2026_09_29": "--browser-e2e deal loop comment->claim->private reply->cart->pay (Stripe MOCK)->ship->partial refund with negatives (replay, negated/question comments, cross-tenant, leak scan): BROWSER PASS. Evidence output/r1-integration/release-gate/run3/FINAL-table.txt"
     },
     "gate_semantics": "本任务贡献相应门禁的切片；全局门禁最终独立运行。外部资格阻塞不阻止明确标记mock的下游本地开发。"
   },
@@ -960,7 +982,7 @@
       "internal/integrations/shipping/**",
       "tests/fulfillment/**"
     ],
-    "status": "NOT_STARTED",
+    "status": "IN_PROGRESS",
     "prerequisite_note": "T11已先验收共享配送配置内核2a5e43c（见delivery-service-acceptance）；本T13完整物流适配/包裹/面单/RMA仍未启动或验收，不因此改变依赖和G08状态",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
@@ -970,7 +992,10 @@
       "real_pg": "NOT_RUN",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "NOT_RUN"
+      "independent_review": "NOT_RUN",
+      "r1_2026_09_29": "Manual fulfilment (0063): merchant carrier+tracking incl. 7-ELEVEN/FamilyMart/Hi-Life/OK CVS codes, versions/void, CSV export, buyer view: REAL_PG MF + BROWSER MF07 PASS. Carrier APIs, labels, CVS store selection at checkout, RMA: NOT_STARTED (R2).",
+      "r2_cvs_2026_09_30": "Lane r2/cvs merged cvs-core+cvs-ecpay+cvs-ui (0072/0073, post_river/0017, internal/integrations/shipping/ecpay, storefront picker/buyer-entered/pay-at-pickup, admin ECPay+CVS cards) and mounted them (cmd/api, buyerhttp, claims-worker ecpay.cvs_create, Caddy hooks routes, compose LC_CVS_ECPAY_ENABLED SANDBOX-only, preflight P06/P09). Integrator evidence output/r2-cvs-merge/: focused REAL_PG PASS=192 FAIL=0, route SQL REAL_PG red+green, MOU + buyer-order BROWSER PASS (regression, MOCK IdP). Then merged unit/cvs-tests (independent gates, ecpaytest fake, --browser-cvs) and fixed the 7 implementation findings it proved at the root (buyer route maps coded CVS refusals; PT429 codes; map-return store-id shape decided by the definer after the nonce; abandon query_at no double count; finish strips the adapter ecpay. prefix; collection_conflict keyed on the reported code; BFF X-Commerce-Device B20; PROCESS 5 column comments). Evidence output/r2-cvs-merge/19b..22: TCV02-TCV06/TCV09/TCV11/TCV14-TCV17 REAL_PG+MOCK PASS=12 FAIL=0, TCV01 UNIT PASS, TCV08 BROWSER MOCK PASS, smoke static PASS (+S46 hooks routing case, full smoke NOT_RUN). NOT_RUN: TCV07/TCV10 SANDBOX (no stage keys), TCV08 SANDBOX/WebKit, TCV12/TCV13 LIVE, independent review of the integrator fixes.",
+      "r2_integration_2026_09_30": "Lane close r2/cvs 06a48a7, evidence output/r2-close-cvs/: TCV gates REAL_PG + MOCK PASS=14 FAIL=0, route SQL REAL_PG PASS=1, regression union REAL_PG PASS=192 FAIL=0, TCV08 + merchant-orders + buyer-order BROWSER (MOCK, ecpaytest fake) exit 0, smoke static PASS. Merged into r2/integration. SANDBOX NOT_RUN: TCV07/TCV10 (no ECPay stage keys), TCV08 SANDBOX/WebKit. LIVE NOT_RUN: TCV12/TCV13. Populated-upgrade fixtures NOT_RUN. Labels, carrier APIs beyond ECPay CVS, RMA: NOT_STARTED."
     },
     "gate_semantics": "本任务贡献相应门禁的切片；全局门禁最终独立运行。外部资格阻塞不阻止明确标记mock的下游本地开发。"
   },
@@ -995,7 +1020,7 @@
       "internal/privacy/**",
       "tests/privacy/**"
     ],
-    "status": "NOT_STARTED",
+    "status": "IN_PROGRESS",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
     "completion_dimensions": {
@@ -1004,7 +1029,10 @@
       "real_pg": "NOT_RUN",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "NOT_RUN"
+      "independent_review": "NOT_RUN",
+      "r2_u08_2026_09_30": "U08 claims retention purge + actor erasure (contracts/claims-retention-purge-v1.md) merged on r2/retention from unit/retention-core 220e43a: 0071 + internal/retention + cmd/retention-admin + claims-worker hourly job; exact-set gates KC03/MCI02/MCI10 updated to §6 clauses 1/2/4/5 (REAL_PG PASS, evidence output/r2-retention-merge/). CRP01-CRP10 NOT_RUN (retention-tests unit), security review NOT_RUN, CRP11 LIVE NOT_RUN; production-mount blocker not lifted (§10 (2)(3) pending; waiver W1 governs).",
+      "r2_u08_tests_2026_09_30": "unit/retention-tests f493e8f merged on r2/retention (5522655): CRP01 UNIT PASS=12 (internal/retention + cmd/retention-admin, -race); CRP02-CRP10 REAL_PG PASS=9 FAIL=0 SKIP=0 (CRP09 River = MOCK); regressions LiveClaims|MetaConsumer PASS=31 and MetaClaims|MetaInbox|MetaRuntime PASS=69 SKIP=1 (MCI11 LIVE); red runs per gate in output/retention-tests/LEDGER.tsv; evidence output/r2-retention-merge/{tests-merge-static,pg-crp02-10,pg-regression,pg-regression-metaclaims}.log. Still NOT_RUN: CRP10 security_reviewer verdict, CRP11 LIVE, CB05 (0078 not on this lane), full go test -race ./... (CI). Production-mount blocker unchanged.",
+      "r2_integration_2026_09_30": "customers-billing-v1 customers half (0078, internal/customers, buyer consent/export/erasure, merchant customers API) merged from r2/customers-billing a76e998 (lane close evidence taken at c0923db). Evidence output/r2-close-customers-billing/ and output/r2-verify-customers-billing/: CB gates REAL_PG + MOCK PASS=13 FAIL=0 SKIP=1 (green-CB-all-final.log; red runs red-*.log), regression union REAL_PG PASS=111 SKIP=2, CB11 BROWSER (MOCK billing fake) PASS incl. buyer privacy page. CB05 restore model = MODEL_ONLY until T20. U08 close on r2/retention b2c7914 (output/r2-close-retention/, output/r2-verify-retention/): CRP02-CRP10 REAL_PG PASS=9 FAIL=0 (CRP09 River = MOCK), regression REAL_PG PASS=100 SKIP=1. Integrator re-check on r2/integration-fix 0681a8e (all six R2 lanes merged; evidence output/r2-integration-fix/): gofmt, go build, go vet, check-pkgdocs, check-gates, depmap --check, check_packet.py, key-literal grep, bash -n, admin+storefront typecheck exit 0; node unit 129/129, admin node 121/121. REAL_PG + MOCK union '^Test(CustomersBilling|MetaAds|ManualFulfilment|MerchantOrders|StripeSP06)' PASS=49 FAIL=0 SKIP=6 (pg-sp06-union-green.log). Full suite on the merged tree: see output/r2-release-gate/ (separate gate run, not claimed here). SANDBOX NOT_RUN: CB10. LIVE NOT_RUN: CB12 (no gate authored), CRP11, MCI11. Customer graph beyond the per-store list/detail and source attribution: NOT_STARTED. Production-mount blocker for claims unchanged (waiver W1)."
     },
     "gate_semantics": "本任务贡献相应门禁的切片；全局门禁最终独立运行。外部资格阻塞不阻止明确标记mock的下游本地开发。"
   },
@@ -1027,7 +1055,7 @@
       "internal/integrations/meta_ads/**",
       "tests/ads/**"
     ],
-    "status": "NOT_STARTED",
+    "status": "IN_PROGRESS",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
     "completion_dimensions": {
@@ -1036,7 +1064,10 @@
       "real_pg": "NOT_RUN",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "NOT_RUN"
+      "independent_review": "NOT_RUN",
+      "r2_2026_09_30": "meta-ads-v1 on r2/ads: independent gates MA01, MA02 (schema/allowance/billing), MA04-MA07, MA11 REAL_PG + MOCK (tests/ads/fakegraph) PASS; MA09a BROWSER (MOCK) PASS via test-local.sh --browser-meta-ads; evidence output/r2-ads-merge/tests/ and output/ads-tests/ (red+green per gate). MA-S1..S4 SANDBOX, MA-L1/L2 LIVE, MA10 review: NOT_RUN.",
+      "r2_close_2026_09_30": "r2/ads close pass: r3-review P2s fixed with red+green gates (IG-only creative page_id, publish refused after a pause (X7), CAPI event_time floored, OAuth state HMAC-keyed, ads permission provisioning script); evidence output/r2-close-ads/. NOT_RUN/BLOCKED until MA-S1 SANDBOX: AD7 auto-pause on an ad account that is no longer ACTIVE; 5.2 min_daily_budget x days local check; no admin disconnect route yet (binding_in_use copy added with it); MA-S1..S4, MA-L1/L2, MA10.",
+      "r2_integration_2026_09_30": "Integrator re-check on r2/integration-fix 0681a8e (all six R2 lanes merged; evidence output/r2-integration-fix/): gofmt, go build, go vet, check-pkgdocs, check-gates, depmap --check, check_packet.py, key-literal grep, bash -n, admin+storefront typecheck exit 0; node unit 129/129, admin node 121/121. REAL_PG + MOCK union '^Test(CustomersBilling|MetaAds|ManualFulfilment|MerchantOrders|StripeSP06)' PASS=49 FAIL=0 SKIP=6 (pg-sp06-union-green.log). Full suite on the merged tree: see output/r2-release-gate/ (separate gate run, not claimed here). MA gates in that union are REAL_PG + MOCK (fakegraph). SANDBOX NOT_RUN: MA-S1..S4 (SKIP), TestMetaAdsChildWorker SKIP = NOT_RUN. LIVE NOT_RUN: MA-L1/L2. MA10 review verdicts: output/ads-review-r1..r3/."
     },
     "gate_semantics": "本任务贡献相应门禁的切片；全局门禁最终独立运行。外部资格阻塞不阻止明确标记mock的下游本地开发。"
   },
@@ -1062,7 +1093,7 @@
       "tests/attribution/**",
       "internal/integrations/meta_catalog/**"
     ],
-    "status": "NOT_STARTED",
+    "status": "IN_PROGRESS",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
     "completion_dimensions": {
@@ -1071,7 +1102,9 @@
       "real_pg": "NOT_RUN",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "NOT_RUN"
+      "independent_review": "NOT_RUN",
+      "r2_2026_09_30": "CAPI + product feed on r2/ads: MA03 consent, MA08 CAPI, feed REAL_PG + MOCK PASS; MA09b BROWSER buyer consent PASS; evidence output/r2-ads-merge/tests/. Catalog mapping beyond the CSV feed and audience export: NOT_STARTED. MA-S4 SANDBOX: NOT_RUN.",
+      "r2_integration_2026_09_30": "Cross-lane defect fixed at 0681a8e: the MA03/MA08 CAPI capture fixture rewrote the attempt profile to SANDBOX and left its payment_query_v1 job on payment_mock_v1, so integration.payment_queue_ready() was false for later tests in the shared DB (TestStripeSP06Schema). Test-fixture leak, no product SQL change. Red d544e34 pg-sp06-red.log (PASS=1 FAIL=1); green pg-sp06-green.log (MA03, MA08, SP06 x3 REAL_PG + MOCK PASS=5 FAIL=0). Evidence output/r2-integration-fix/. SANDBOX NOT_RUN: MA-S4. LIVE NOT_RUN. Catalog mapping beyond the CSV feed, audience export: NOT_STARTED."
     },
     "gate_semantics": "本任务贡献相应门禁的切片；全局门禁最终独立运行。外部资格阻塞不阻止明确标记mock的下游本地开发。"
   },
@@ -1098,7 +1131,7 @@
       "tests/billing/**",
       "internal/notifications/**"
     ],
-    "status": "NOT_STARTED",
+    "status": "IN_PROGRESS",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
     "completion_dimensions": {
@@ -1107,7 +1140,8 @@
       "real_pg": "NOT_RUN",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "NOT_RUN"
+      "independent_review": "NOT_RUN",
+      "r2_integration_2026_09_30": "customers-billing-v1 billing half (0079, internal/billing, platform Stripe Billing webhook/checkout/portal, BD4 standing, BD6 usage, finance summary + CSV, LC_BILLING_ENABLED default off) merged from r2/customers-billing a76e998 (lane close evidence taken at c0923db). Evidence output/r2-close-customers-billing/: CB06-CB09, CB13 inside the CB run REAL_PG + MOCK (internal/billing/billingtest fake) PASS=13 FAIL=0 SKIP=1; webhook invoice alert red+green; CB11 BROWSER (MOCK) PASS. Integrator re-check on r2/integration-fix 0681a8e (all six R2 lanes merged; evidence output/r2-integration-fix/): gofmt, go build, go vet, check-pkgdocs, check-gates, depmap --check, check_packet.py, key-literal grep, bash -n, admin+storefront typecheck exit 0; node unit 129/129, admin node 121/121. REAL_PG + MOCK union '^Test(CustomersBilling|MetaAds|ManualFulfilment|MerchantOrders|StripeSP06)' PASS=49 FAIL=0 SKIP=6 (pg-sp06-union-green.log). Full suite on the merged tree: see output/r2-release-gate/ (separate gate run, not claimed here). SANDBOX NOT_RUN: CB10 (no platform test key). LIVE NOT_RUN: CB12. Owner inputs open: billing entity, plan price/currency (rulings Q1/Q2)."
     },
     "gate_semantics": "本任务贡献相应门禁的切片；全局门禁最终独立运行。外部资格阻塞不阻止明确标记mock的下游本地开发。"
   },
@@ -1138,7 +1172,7 @@
       "apps/admin/operations/**",
       "tests/admin/**"
     ],
-    "status": "NOT_STARTED",
+    "status": "IN_PROGRESS",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
     "completion_dimensions": {
@@ -1147,7 +1181,8 @@
       "real_pg": "NOT_RUN",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "NOT_RUN"
+      "independent_review": "NOT_RUN",
+      "r2_integration_2026_09_30": "Ops UIs landed with their lanes (apps/admin): CVS/ECPay cards + merchant orders (BROWSER MOCK, output/r2-close-cvs/18-20), customers + billing + finance pages (BROWSER MOCK CB11, output/r2-close-customers-billing/green-browser-*.log), ads drafts/approval (BROWSER MOCK MA09a, output/r2-ads-merge/tests/), password login (BROWSER, output/r2-close-auth/g-browser-password-auth.log). Integrator re-check 0681a8e: admin + storefront typecheck exit 0, admin node tests 121/121 (output/r2-integration-fix/). Browser suites were NOT re-run by this integrator pass on the merged tree (see output/r2-release-gate/). SANDBOX NOT_RUN, LIVE NOT_RUN. Ads disconnect route and dedicated ops consoles beyond these pages: NOT_STARTED."
     },
     "gate_semantics": "本任务贡献相应门禁的切片；全局门禁最终独立运行。外部资格阻塞不阻止明确标记mock的下游本地开发。"
   },
@@ -1224,7 +1259,8 @@
       "real_pg": "PASS_BOUNDED_LOCAL_LRC_WSD_SPL",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "PASS_BOUNDED_LOCAL_ONLY"
+      "independent_review": "PASS_BOUNDED_LOCAL_ONLY",
+      "r1_2026_09_29": "Adversarial security review of R1 surface (5 dimensions, verified): 6 P2 fixed with red->green tests (sec-fixes S1-S6), 0 P0/P1. Full fault-injection matrix NOT_RUN."
     },
     "local_logical_restore": {
       "status": "ACCEPTED_LOCAL",
@@ -1303,7 +1339,7 @@
       "docs/runbooks/**",
       "evidence/release/**"
     ],
-    "status": "NOT_STARTED",
+    "status": "IN_PROGRESS",
     "done_requires": "实现+指定测试+独立复核+证据路径；不可自写PASS",
     "max_attempts_before_escalation": 2,
     "completion_dimensions": {
@@ -1312,7 +1348,8 @@
       "real_pg": "NOT_RUN",
       "provider_sandbox": "NOT_RUN_OR_NOT_APPLICABLE",
       "provider_live": "NOT_RUN_OR_NOT_APPLICABLE",
-      "independent_review": "NOT_RUN"
+      "independent_review": "NOT_RUN",
+      "r1_2026_09_29": "Deploy package (compose, runbooks, release-gate.sh, CI deploy smoke 55 PASS / S29m BLOCKED media lane): R1 release gate 0 FAIL, all NOT_RUN accepted. Production host, OIDC IdP, Stripe live activation, Meta App Review: owner prerequisites; no production deploy performed."
     },
     "gate_semantics": "本任务贡献相应门禁的切片；全局门禁最终独立运行。外部资格阻塞不阻止明确标记mock的下游本地开发。"
   }

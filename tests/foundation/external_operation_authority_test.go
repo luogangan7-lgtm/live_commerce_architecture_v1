@@ -163,31 +163,78 @@ func TestT06WorkerAuthorityAndFunctionACL(t *testing.T) {
 	var safe bool
 	// Enumerate exact signatures, not just a count: an added overload must fail
 	// closed, and the shared private guard must never be callable by workers.
-	err = f.owner.QueryRow(ctx, `WITH approved(oid,worker_execute) AS (VALUES
-	 ('integration.claim_operation(uuid,integer,bytea)'::regprocedure::oid,true),
-	 ('integration.complete_operation(uuid,bigint,bytea,text,text,text)'::regprocedure::oid,true),
-	 ('integration.require_payment_query(uuid,bigint,bytea,text)'::regprocedure::oid,false),
-	 ('integration.load_payment_query(uuid,bigint,bytea,text)'::regprocedure::oid,true),
- ('integration.record_payment_query(uuid,bigint,bytea,text,jsonb,bigint)'::regprocedure::oid,true),
-	 ('integration.finish_payment_query(uuid,bigint,bytea,text,text,text)'::regprocedure::oid,true),
-	 ('integration.payment_job_queue(bigint)'::regprocedure::oid,false),
-	 ('integration.route_payment_queue_v1()'::regprocedure::oid,false),
-	 ('integration.payment_queue_ready()'::regprocedure::oid,true),
-	 ('integration.guard_payment_job_family()'::regprocedure::oid,false),
-	 ('integration.reject_legacy_family_job()'::regprocedure::oid,false))
+	err = f.owner.QueryRow(ctx, `WITH approved(oid,worker_execute,owner,registrar_execute,runtime_execute,checkout_writer_execute,checkout_runtime_execute) AS (VALUES
+	 ('integration.claim_operation(uuid,integer,bytea)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.complete_operation(uuid,bigint,bytea,text,text,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.require_payment_query(uuid,bigint,bytea,text)'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.load_payment_query(uuid,bigint,bytea,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.record_payment_query(uuid,bigint,bytea,text,jsonb,bigint)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.finish_payment_query(uuid,bigint,bytea,text,text,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.payment_job_queue(bigint)'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.route_payment_queue_v1()'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.payment_queue_ready()'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.guard_payment_job_family()'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.reject_legacy_family_job()'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.require_stripe_query(uuid,bigint,bytea,text)'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.load_stripe_credential(uuid,bigint,bytea,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.load_stripe_session(uuid,bigint,bytea,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.load_stripe_signal(uuid,bigint,bytea,text,bigint,uuid)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.mark_stripe_create_sent(uuid,bigint,bytea,text,bytea)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.note_stripe_expire(uuid,bigint,bytea,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.record_stripe_observation(uuid,bigint,bytea,text,jsonb,bigint,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.consume_stripe_signal(uuid,uuid,bigint,bytea,text,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.finish_stripe_query(uuid,bigint,bytea,text,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.require_stripe_registrar_scope(uuid,uuid,uuid)'::regprocedure::oid,false,'commerce_payment_registry_writer',false,false,false,false),
+	 ('integration.register_stripe_account(uuid,uuid,uuid,uuid,uuid,text,text,text,bytea,bytea)'::regprocedure::oid,false,'commerce_payment_registry_writer',true,false,false,false),
+	 ('integration.rotate_stripe_key(uuid,uuid,uuid,uuid,bigint,text,bytea,bytea)'::regprocedure::oid,false,'commerce_payment_registry_writer',true,false,false,false),
+	 ('integration.require_stripe_refund(uuid,bigint,bytea,text)'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.load_stripe_refund(uuid,bigint,bytea,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.mark_stripe_refund_sent(uuid,bigint,bytea,text,bytea)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.record_stripe_refund_observation(uuid,bigint,bytea,text,jsonb,bigint)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.record_stripe_charge_observation(uuid,bigint,bytea,text,jsonb,bigint)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.finish_stripe_refund(uuid,bigint,bytea,text,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 -- meta-claims-intake-v1 (migration 0064 and post-River 0014): reply planning is intake-only, the Page-token
+	 -- loader is the dispatcher's only credential read, the registrar has its own role (not the payment registrar).
+	 ('integration.claim_reply_plannable(uuid)'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.plan_claim_reply(uuid,uuid,bytea,text,bigint)'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.load_meta_page_token(uuid,bigint,bytea)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.register_meta_page_token(uuid,uuid,uuid,uuid,text,text,bigint,text,bytea,bytea,text[])'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 -- R1 ruling F2 (migration 0066): the Meta registrar's binding definer, same owner/grant shape as the page-token one.
+	 ('integration.register_meta_binding(uuid,uuid,uuid,text,text)'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.guard_claims_intake_job()'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.guard_external_operation_job_link()'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 -- meta-ads-v1 (migration 0074, post-River 0015; unit ads-core): the ads token registrar is hash-authenticated and
+	 -- callable by the merchant runtime (runtime_execute), the loader is the dispatcher's only
+	 -- ads credential read, and the two River guards have no caller EXECUTE.
+	 ('integration.register_meta_ads_token(bytea,uuid,uuid,uuid,bigint)'::regprocedure::oid,false,'commerce_integration_writer',false,true,false,false),
+	 ('integration.load_meta_ads_token(uuid,bigint,bytea)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.guard_ads_job()'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 ('integration.guard_ads_job_link()'::regprocedure::oid,false,'commerce_integration_writer',false,false,false,false),
+	 -- taiwan-cvs-logistics-v1 (migrations 0072/0073, unit cvs-core): +8 approved integration functions. Each declares its exact EXECUTE set; every other
+	 -- role stays refused by the equality below (the registrar, ingress and buyer roles never gain anything).
+	 ('integration.register_ecpay_logistics(bytea,uuid,text,bytea,bigint,text,text,text,text,bytea,bytea,boolean,text)'::regprocedure::oid,false,'commerce_integration_writer',false,true,false,false),
+	 ('integration.set_ecpay_logistics_enabled(bytea,uuid,text,bytea,bigint,boolean)'::regprocedure::oid,false,'commerce_integration_writer',false,true,false,false),
+	 ('integration.plan_cvs_create(uuid,uuid,uuid,smallint,uuid,uuid,uuid,bigint)'::regprocedure::oid,false,'commerce_integration_writer',false,false,true,false),
+	 ('integration.load_cvs_create(uuid,bigint,bytea,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.finish_cvs_create(uuid,bigint,bytea,text,text,text,text,text,text,text)'::regprocedure::oid,true,'commerce_integration_writer',false,false,false,false),
+	 ('integration.load_ecpay_key_for_status(uuid)'::regprocedure::oid,false,'commerce_integration_writer',false,true,false,false),
+	 ('integration.load_ecpay_key_for_selection(uuid)'::regprocedure::oid,false,'commerce_integration_writer',false,true,false,true),
+	 ('integration.load_ecpay_key_for_merchant(bytea,uuid)'::regprocedure::oid,false,'commerce_integration_writer',false,true,false,false))
 	 SELECT count(*),bool_and(a.oid IS NOT NULL AND p.prosecdef AND p.proconfig = ARRAY['search_path=pg_catalog']
-	 AND pg_get_userbyid(p.proowner)='commerce_integration_writer'
+	 AND pg_get_userbyid(p.proowner)=a.owner
 	 AND has_function_privilege('commerce_worker',p.oid,'EXECUTE')=a.worker_execute
-	 AND NOT has_function_privilege('commerce_runtime',p.oid,'EXECUTE')
+	 AND has_function_privilege('commerce_payment_registrar',p.oid,'EXECUTE')=a.registrar_execute
+	 AND NOT has_function_privilege('commerce_stripe_ingress',p.oid,'EXECUTE')
+	 AND has_function_privilege('commerce_runtime',p.oid,'EXECUTE')=a.runtime_execute
 	 AND NOT has_function_privilege('commerce_buyer_runtime',p.oid,'EXECUTE')
 	 AND NOT has_function_privilege('commerce_buyer_issuer',p.oid,'EXECUTE')
-	 AND NOT has_function_privilege('commerce_checkout_runtime',p.oid,'EXECUTE')
-	 AND NOT has_function_privilege('commerce_hosted_runtime',p.oid,'EXECUTE')
-	 AND NOT has_function_privilege('commerce_checkout_writer',p.oid,'EXECUTE')
+	 AND has_function_privilege('commerce_checkout_runtime',p.oid,'EXECUTE')=a.checkout_runtime_execute
+	 AND has_function_privilege('commerce_hosted_runtime',p.oid,'EXECUTE')=a.checkout_runtime_execute -- 0025: hosted_runtime inherits commerce_checkout_runtime (INHERIT TRUE), so it never has more than the checkout runtime
+	 AND has_function_privilege('commerce_checkout_writer',p.oid,'EXECUTE')=a.checkout_writer_execute
 	 AND NOT EXISTS(SELECT 1 FROM aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE a.grantee=0 AND a.privilege_type='EXECUTE'))
 	 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
 	 LEFT JOIN approved a ON a.oid=p.oid WHERE n.nspname='integration'`).Scan(&functions, &safe)
-	if err != nil || functions != 11 || !safe {
+	if err != nil || functions != 48 || !safe {
 		t.Fatalf("fixed function ACL: count=%d safe=%v err=%v", functions, safe, err)
 	}
 }

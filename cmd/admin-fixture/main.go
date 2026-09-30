@@ -1,4 +1,12 @@
-// admin-fixture serves a disposable local database, never an existing shop.
+// Command admin-fixture owns a disposable local fixture for the admin ledger UI: it migrates an
+// empty lc_admin_fixture database on 127.0.0.1, seeds one store with nine sample SKUs and a dev
+// session, writes a private 0600 env file for the dev Next adapter and serves the Go admin API on
+// 127.0.0.1:18081.
+//
+// It never touches an existing shop or customer database (empty-database, loopback and login
+// guards), never runs without COMMERCE_FIXTURE_ALLOWED=1, and never passes a credential through argv
+// or env (the owner DSN arrives via a one-use 0600 file). Started by scripts/dev/admin-fixture.sh
+// and by tests/foundation TestBrowserAdminLedgerFixtureChain; no deployment runs it.
 package main
 
 import (

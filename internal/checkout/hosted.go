@@ -33,11 +33,14 @@ type HostedForm struct {
 	Fields map[string]string `json:"fields"`
 }
 
+// HostedHandoff is the PAYUNi form release or the Stripe redirect release. A Stripe
+// RedirectURL is a live Checkout capability: it is never logged or persisted here.
 type HostedHandoff struct {
 	OrderID     string      `json:"order_id"`
 	Disposition string      `json:"disposition"`
 	ExpiresAt   time.Time   `json:"expires_at"`
 	Form        *HostedForm `json:"form,omitempty"`
+	RedirectURL string      `json:"redirect_url,omitempty"`
 }
 
 type HostedPaymentStarter struct {
@@ -45,26 +48,63 @@ type HostedPaymentStarter struct {
 	keys         *accounts.Keyring
 	config       HostedConfig
 	configDigest [32]byte
+	payuni       bool // PAYUNi configured; keys/config/configDigest are meaningful only then
+	stripe       *StripeHostedConfig
+	stripeDigest [32]byte
 }
 
+// HostedProviders selects which providers a hosted service admits; at least one is set.
+type HostedProviders struct {
+	PAYUNi *HostedConfig
+	Stripe *StripeHostedConfig
+}
+
+// NewHostedPaymentStarter is the PAYUNi-only constructor kept for existing callers.
 func NewHostedPaymentStarter(ctx context.Context, hostedPool *pgxpool.Pool, jobs *river.Client[pgx.Tx],
 	profile string, keys *accounts.Keyring, config HostedConfig) (*HostedPaymentStarter, error) {
-	canonical, digest, err := config.CanonicalDigest()
-	if ctx == nil || jobs == nil || keys == nil || !validPaymentProfile(profile) || err != nil {
+	return NewHostedPaymentService(ctx, hostedPool, jobs, profile, keys, HostedProviders{PAYUNi: &config})
+}
+
+func NewHostedPaymentService(ctx context.Context, hostedPool *pgxpool.Pool, jobs *river.Client[pgx.Tx],
+	profile string, keys *accounts.Keyring, p HostedProviders) (*HostedPaymentStarter, error) {
+	if ctx == nil || jobs == nil || !validPaymentProfile(profile) || (p.PAYUNi == nil && p.Stripe == nil) {
 		return nil, command.ErrInvalid
+	}
+	out := &HostedPaymentStarter{starter: PaymentStarter{pool: hostedPool, jobs: jobs, profile: profile}}
+	if p.PAYUNi != nil {
+		canonical, digest, err := p.PAYUNi.CanonicalDigest()
+		if keys == nil || err != nil {
+			return nil, command.ErrInvalid
+		}
+		out.keys, out.config, out.configDigest, out.payuni = keys, canonical, digest, true
+	}
+	if p.Stripe != nil {
+		canonical, digest, err := p.Stripe.CanonicalDigest()
+		// stripe-live-enable-v1 §5.2: the Stripe branch admits every valid profile (validPaymentProfile above), LIVE
+		// included. The owner's flag+reference pair is enforced by the caller (cmd/api loadBuyerPaymentConfig), and the
+		// per-store gate is SQL: hosted_payment_view_v2 / start_stripe_payment need a REAL_LIVE, unrevoked qualification.
+		if err != nil {
+			return nil, command.ErrInvalid
+		}
+		out.stripe, out.stripeDigest = &canonical, digest
 	}
 	if err := platform.ValidateHostedPool(ctx, hostedPool); err != nil {
 		return nil, err
 	}
-	return &HostedPaymentStarter{starter: PaymentStarter{pool: hostedPool, jobs: jobs, profile: profile},
-		keys: keys, config: canonical, configDigest: digest}, nil
+	return out, nil
 }
 
 // BeginHosted commits the original payment start and its sealed form together.
 // The repeatable result contains no form or credential material.
 func (s *HostedPaymentStarter) BeginHosted(ctx context.Context, token, storeID, key string, in HostedInput) (PaymentResult, error) {
-	if ctx == nil || s == nil || s.starter.pool == nil || s.starter.jobs == nil || s.keys == nil ||
+	if ctx == nil || s == nil || s.starter.pool == nil || s.starter.jobs == nil ||
 		!validPaymentProfile(s.starter.profile) || !checkoutKey.MatchString(key) || !validHostedInput(in) {
+		return PaymentResult{}, command.ErrInvalid
+	}
+	if in.MethodCode == stripeMethodCode {
+		return s.beginStripe(ctx, token, storeID, key, in)
+	}
+	if !s.payuni || s.keys == nil {
 		return PaymentResult{}, command.ErrInvalid
 	}
 	request, _ := json.Marshal(struct {
@@ -120,6 +160,18 @@ func (s *HostedPaymentStarter) TakeHosted(ctx context.Context, token, storeID, o
 	tokenHash := sha256.Sum256([]byte(token))
 	var out HostedHandoff
 	err := buyer.WithScope(ctx, s.starter.pool, token, storeID, func(callCtx context.Context, tx pgx.Tx, scope buyer.Scope) error {
+		if s.stripe != nil {
+			stripeOrder, err := s.isStripeOrder(callCtx, tx, tokenHash[:], storeID, orderID)
+			if err != nil {
+				return err
+			}
+			if stripeOrder {
+				return s.takeStripeTx(callCtx, tx, scope, tokenHash[:], storeID, orderID, &out)
+			}
+		}
+		if !s.payuni {
+			return command.ErrConflict
+		}
 		var body []byte
 		if err := tx.QueryRow(callCtx, `SELECT checkout.take_hosted_page($1::bytea,$2::uuid,$3::uuid,$4::text,$5::bytea)`,
 			tokenHash[:], storeID, orderID, s.starter.profile, s.configDigest[:]).Scan(&body); err != nil {
@@ -145,8 +197,10 @@ func (s *HostedPaymentStarter) TakeHosted(ctx context.Context, token, storeID, o
 }
 
 func validHostedInput(in HostedInput) bool {
-	return validPaymentInput(PaymentInput{OrderID: in.OrderID, MethodCode: in.MethodCode,
-		MethodVersion: in.MethodVersion}) &&
+	// validPaymentInput is PAYUNi-only; Stripe reuses its id/version rules under the PAYUNi code.
+	return (in.MethodCode == "payuni_credit" || in.MethodCode == stripeMethodCode) &&
+		validPaymentInput(PaymentInput{OrderID: in.OrderID, MethodCode: "payuni_credit",
+			MethodVersion: in.MethodVersion}) &&
 		(in.Locale == "zh-CN" || in.Locale == "zh-TW" || in.Locale == "en")
 }
 
@@ -221,7 +275,7 @@ func checkHostedDeadline(ctx context.Context, tx pgx.Tx, deadline time.Time) err
 }
 
 func validHostedHandoff(out HostedHandoff, orderID, profile string) bool {
-	if out.OrderID != orderID || out.ExpiresAt.IsZero() {
+	if out.OrderID != orderID || out.ExpiresAt.IsZero() || out.RedirectURL != "" {
 		return false
 	}
 	switch out.Disposition {

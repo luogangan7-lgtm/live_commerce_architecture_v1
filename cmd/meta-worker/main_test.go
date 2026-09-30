@@ -93,3 +93,40 @@ func TestMetaWorkerConfigBoundsAndNoAppSecrets(t *testing.T) {
 		t.Fatal("worker config JSON leaked URL")
 	}
 }
+
+func TestMetaWorkerClaimsActorKeyConfig(t *testing.T) {
+	values := workerTestEnv()
+	get := func(name string) string { return values[name] }
+	// Unset: staging off, everything else unchanged.
+	if c, err := loadConfig(get); err != nil || c.actor != (workerConfig{}).actor {
+		t.Fatal("absent actor key must leave staging off")
+	}
+	good := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32))
+	values["COMMERCE_CLAIMS_ACTOR_KEY"] = good
+	c, err := loadConfig(get)
+	if err != nil || c.actor == (workerConfig{}).actor {
+		t.Fatal("valid actor key rejected")
+	}
+	for _, rendered := range []string{fmt.Sprint(c), fmt.Sprintf("%+v", c), fmt.Sprintf("%#v", c)} {
+		if strings.Contains(rendered, good) {
+			t.Fatal("worker config leaked the actor key")
+		}
+	}
+	for _, bad := range []string{"not base64", good[:43], base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 31)),
+		base64.StdEncoding.EncodeToString(make([]byte, 32)), " " + good} {
+		values["COMMERCE_CLAIMS_ACTOR_KEY"] = bad
+		if _, err := loadConfig(get); !errors.Is(err, errWorkerConfig) {
+			t.Fatalf("malformed actor key %q accepted", bad)
+		}
+	}
+	// The key is read only when the worker is enabled.
+	values["COMMERCE_META_WORKER_ENABLED"] = "0"
+	if err := run(context.Background(), func(name string) string {
+		if name != "COMMERCE_META_WORKER_ENABLED" {
+			t.Fatal("disabled worker read the actor key")
+		}
+		return "0"
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

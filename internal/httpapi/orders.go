@@ -88,7 +88,7 @@ func parseOrdersQuery(u *url.URL) (merchantorders.ListRequest, error) {
 			in.Page.Cursor = value[0]
 		case "state":
 			switch value[0] {
-			case "all", "DRAFT", "AWAITING_PAYMENT", "CONFIRMED", "CANCELLED":
+			case "all", "DRAFT", "AWAITING_PAYMENT", "CONFIRMED", "CANCELLED", "shipped", "unshipped":
 				in.State = value[0]
 			default:
 				return in, command.ErrInvalid

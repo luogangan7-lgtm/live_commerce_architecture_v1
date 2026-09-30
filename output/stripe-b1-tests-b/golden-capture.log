@@ -1,0 +1,6 @@
+=== RUN   TestZZCaptureSP14
+--- PASS: TestZZCaptureSP14 (1.48s)
+PASS
+ok  	livecommerce/tests/foundation	3.861s
+test-focused: top-level PASS=1 FAIL=0 SKIP=0 exit=0
+LC_FOCUSED_TIMEOUT=900s bash scripts/dev/test-focused.sh '^TestZZCaptureSP14$  16.01s user 2.80s system 22% cpu 1:22.05 total

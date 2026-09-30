@@ -139,9 +139,7 @@ func TestLiveMediaRuntimeLMW03CommandAuthorityAndPoolCleanup(t *testing.T) {
 	base = lmwReplace(lmwReplace(base, "COMMERCE_MEDIA_WORKER_DATABASE_URL", workerDSN), "COMMERCE_MEDIA_EXECUTOR_DATABASE_URL", executorDSN)
 	wrong := lmwReplace(base, "COMMERCE_MEDIA_EXECUTOR_DATABASE_URL", h.lp.f.runtime.Config().ConnString())
 	lmwFail(t, lmwProcess(t, binary, "wrong-role", wrong), "media_worker_database_unavailable", workerDSN)
-	if mrPoolCount(t, h.lp.f, workerName) != 0 {
-		t.Fatal("first media pool leaked after wrong second role")
-	}
+	waitPoolsGone(t, h.lp.f, "first media pool leaked after wrong second role", workerName)
 	clone := mrFixture(t)
 	cloneLogin, cloneExecutor := lmaLogin(t, clone, "commerce_media_executor")
 	mustExec(t, clone.owner, "REVOKE commerce_media_executor FROM "+pgx.Identifier{cloneLogin}.Sanitize())
@@ -159,9 +157,10 @@ func TestLiveMediaRuntimeLMW03CommandAuthorityAndPoolCleanup(t *testing.T) {
 	checkExecutor.Close()
 	cross := lmwReplace(base, "COMMERCE_MEDIA_EXECUTOR_DATABASE_URL", cloneDSN)
 	lmwFail(t, lmwProcess(t, binary, "cross-db", cross), "media_worker_database_unavailable", workerDSN, cloneDSN)
-	if mrPoolCount(t, h.lp.f, workerName) != 0 || mrPoolCount(t, clone, executorName+"_clone") != 0 {
-		t.Fatal("cross-DB rejection leaked pools")
-	}
+	// checkWorker/checkExecutor above used these same application_names; their
+	// Close and the process exit are both awaited as backend teardown.
+	waitPoolsGone(t, h.lp.f, "cross-DB rejection leaked pools", workerName)
+	waitPoolsGone(t, clone, "cross-DB rejection leaked pools", executorName+"_clone")
 	// The same login acquiring both fixed authorities is forbidden before ready.
 	mustExec(t, h.lp.f.owner, "GRANT commerce_media_executor TO "+pgx.Identifier{h.workerLogin}.Sanitize()+" WITH INHERIT TRUE, SET FALSE")
 	t.Cleanup(func() {
@@ -170,9 +169,7 @@ func TestLiveMediaRuntimeLMW03CommandAuthorityAndPoolCleanup(t *testing.T) {
 	mixed := lmwProcess(t, binary, "mixed-authority", base)
 	lmwFail(t, mixed, "media_worker_database_unavailable", workerDSN, executorDSN)
 	mustExec(t, h.lp.f.owner, "REVOKE commerce_media_executor FROM "+pgx.Identifier{h.workerLogin}.Sanitize())
-	if mrPoolCount(t, h.lp.f, workerName, executorName) != 0 {
-		t.Fatal("mixed-authority rejection leaked pools")
-	}
+	waitPoolsGone(t, h.lp.f, "mixed-authority rejection leaked pools", workerName, executorName)
 	// A valid process must never report ready after a required guard drifts.
 	_, err = h.lp.f.owner.Exec(context.Background(), `REVOKE EXECUTE ON FUNCTION live.media_worker_ready() FROM commerce_media_executor`)
 	if err != nil {
@@ -182,9 +179,7 @@ func TestLiveMediaRuntimeLMW03CommandAuthorityAndPoolCleanup(t *testing.T) {
 		_, _ = h.lp.f.owner.Exec(context.Background(), `GRANT EXECUTE ON FUNCTION live.media_worker_ready() TO commerce_media_executor`)
 	})
 	lmwFail(t, lmwProcess(t, binary, "drift", base), "media_worker_database_unavailable", workerDSN, executorDSN)
-	if mrPoolCount(t, h.lp.f, workerName, executorName) != 0 {
-		t.Fatal("readiness drift leaked pools")
-	}
+	waitPoolsGone(t, h.lp.f, "readiness drift leaked pools", workerName, executorName)
 }
 
 func TestLiveMediaRuntimeLMW04And05ProcessStartStopRestart(t *testing.T) {
@@ -234,7 +229,8 @@ func TestLiveMediaRuntimeLMW04And05ProcessStartStopRestart(t *testing.T) {
 		t.Fatalf("Start was not durably observed: %+v", f)
 	}
 	mrStop(t, p, syscall.SIGTERM, true)
-	if mrPoolCount(t, h.lp.f, workerName, executorName) != 0 || stops.Load() != 0 {
+	waitPoolsGone(t, h.lp.f, "shutdown leaked media pool or issued provider Stop", workerName, executorName)
+	if stops.Load() != 0 {
 		t.Fatal("shutdown leaked media pool or issued provider Stop")
 	}
 	// Persisted Start must survive command restart without another Start.
@@ -259,9 +255,7 @@ func TestLiveMediaRuntimeLMW04And05ProcessStartStopRestart(t *testing.T) {
 		t.Fatalf("Stop terminal evidence/budget: %+v", state)
 	}
 	mrStop(t, restart, syscall.SIGINT, true)
-	if mrPoolCount(t, h.lp.f, workerName, executorName) != 0 {
-		t.Fatal("restart shutdown leaked pools")
-	}
+	waitPoolsGone(t, h.lp.f, "restart shutdown leaked pools", workerName, executorName)
 	var foreignAfter []byte
 	if err := h.lp.f.owner.QueryRow(context.Background(), `SELECT to_jsonb(j) FROM river.river_job j WHERE id=$1`, foreignID).Scan(&foreignAfter); err != nil {
 		t.Fatal(err)

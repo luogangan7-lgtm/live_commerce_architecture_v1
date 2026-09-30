@@ -23,9 +23,15 @@ import (
 	"livecommerce/internal/platform"
 )
 
-func registerStudioRoutes(mux *http.ServeMux, pool *pgxpool.Pool, planner *live.MediaPlanner, browserInput *live.BrowserInputRuntime) {
-	if planner == nil {
+// registerStudioRoutes mounts planning (list/create/detail/edit) when studio is on, the MOCK rehearsal
+// routes only with a media planner, and the input routes only with planner and browserInput. With
+// media off those routes are absent (404), never a disabled stub (R1 ruling G2).
+func registerStudioRoutes(mux *http.ServeMux, pool *pgxpool.Pool, studio bool, planner *live.MediaPlanner, browserInput *live.BrowserInputRuntime) {
+	if !studio {
 		return
+	}
+	if planner == nil {
+		browserInput = nil // input routes need the planner
 	}
 	const base = "/v1/admin/stores/{store_id}/live-sessions"
 	mux.HandleFunc("GET "+base, studioRoute(http.MethodGet, true, func(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +53,11 @@ func registerStudioRoutes(mux *http.ServeMux, pool *pgxpool.Pool, planner *live.
 			return
 		}
 		scoped(pool, "live:read", func(ctx context.Context, tx pgx.Tx, s platform.Scope, r *http.Request) (any, error) {
-			return live.GetStudio(ctx, tx, s, bearerToken(r), r.PathValue("session_id"))
+			out, err := live.GetStudio(ctx, tx, s, bearerToken(r), r.PathValue("session_id"))
+			if err != nil {
+				return nil, err
+			}
+			return studioDetail{Studio: out, MediaEnabled: planner != nil}, nil
 		})(w, r)
 	}))
 	type edit struct {
@@ -57,6 +67,12 @@ func registerStudioRoutes(mux *http.ServeMux, pool *pgxpool.Pool, planner *live.
 	mux.HandleFunc("PATCH "+base+"/{session_id}", studioRoute(http.MethodPatch, false, studioBodyRoute(pool, "live:manage", []string{"title", "scheduled_at", "aspect_ratio", "expected_version"}, func(ctx context.Context, tx pgx.Tx, s platform.Scope, r *http.Request, in edit) (any, error) {
 		return live.UpdateDraft(ctx, tx, s, bearerToken(r), r.Header.Get("Idempotency-Key"), r.PathValue("session_id"), in.ExpectedVersion, in.DraftInput)
 	})))
+	for _, path := range []string{base, base + "/{session_id}"} {
+		mux.HandleFunc(path, studioRoute("", false, nil))
+	}
+	if planner == nil {
+		return
+	}
 	type start struct {
 		AuthorizationID        string `json:"authorization_id"`
 		ExpectedSessionVersion int64  `json:"expected_session_version"`
@@ -157,7 +173,7 @@ func registerStudioRoutes(mux *http.ServeMux, pool *pgxpool.Pool, planner *live.
 	}
 	// Methodless fallbacks keep method errors inside the same private response
 	// boundary. Optional input routes are absent until explicitly configured.
-	for _, path := range []string{base, base + "/{session_id}", base + "/{session_id}/rehearsal/start", base + "/{session_id}/rehearsal/stop"} {
+	for _, path := range []string{base + "/{session_id}/rehearsal/start", base + "/{session_id}/rehearsal/stop"} {
 		mux.HandleFunc(path, studioRoute("", false, nil))
 	}
 	if browserInput != nil {
@@ -165,6 +181,13 @@ func registerStudioRoutes(mux *http.ServeMux, pool *pgxpool.Pool, planner *live.
 			mux.HandleFunc(path, studioRoute("", false, nil))
 		}
 	}
+}
+
+// studioDetail is the GET /{session_id} body: the studio-v1 projection plus media_enabled, the
+// read-only capability the admin Studio uses to hide rehearsal controls (R1 ruling G2).
+type studioDetail struct {
+	live.Studio
+	MediaEnabled bool `json:"media_enabled"`
 }
 
 type studioReceipt struct {
@@ -246,31 +269,39 @@ func studioBodyRoute[T any](pool *pgxpool.Pool, permission string, fields []stri
 }
 
 func studioDecodeBody[T any](w http.ResponseWriter, r *http.Request, fields []string) (T, bool) {
+	in, _, ok := studioDecodeRaw[T](w, r, fields)
+	return in, ok
+}
+
+// studioDecodeRaw is studioDecodeBody that also returns the validated body bytes, so
+// claims.go can add key-presence rules without reading the request twice. It has
+// already written the 415/400 response whenever it returns false.
+func studioDecodeRaw[T any](w http.ResponseWriter, r *http.Request, fields []string) (T, []byte, bool) {
 	var in T
 	media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" {
 		respondError(w, http.StatusUnsupportedMediaType, "json_required")
-		return in, false
+		return in, nil, false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	defer r.Body.Close()
 	raw, err := io.ReadAll(r.Body)
 	if err != nil || !utf8.Valid(raw) || !studioUniqueJSON(raw, fields) {
 		respondError(w, http.StatusBadRequest, "invalid_json")
-		return in, false
+		return in, nil, false
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid_json")
-		return in, false
+		return in, nil, false
 	}
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		respondError(w, http.StatusBadRequest, "invalid_json")
-		return in, false
+		return in, nil, false
 	}
-	return in, true
+	return in, raw, true
 }
 
 func studioUniqueJSON(raw []byte, fields []string) bool {

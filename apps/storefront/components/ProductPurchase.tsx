@@ -1,5 +1,10 @@
 "use client";
 
+// Product page purchase flow (BFF /api/buyer/{catalog,cart,checkout-options,quotes,destination,checkout,orders}
+// -> Go /v1/buyer/*). Delivery list (checkout-options): home and the four CVS chains; a chain the store cannot
+// sell yet arrives as {available:false, reason} and is shown disabled "Coming soon"
+// (contracts/taiwan-cvs-logistics-v1.md §5.1). The CVS store picker itself lives in OrderFlow/CvsPickup and
+// returns to this route with ?cvs_selection= (§5.2), which is why the route keeps checkout state across a reload.
 import { useEffect, useRef, useState } from "react";
 import type { Locale } from "@live-commerce/i18n";
 import {
@@ -10,6 +15,7 @@ import {
 } from "../lib/buyer-client";
 import { purchaseCopy } from "../lib/purchase-copy";
 import { orderCopy } from "../lib/order-copy";
+import { cvsCopy } from "../lib/cvs-copy";
 import OrderFlow, { OrderDetails } from "./OrderFlow";
 import OrderHistory from "./OrderHistory";
 import { historyCopy } from "../lib/history-copy";
@@ -22,7 +28,8 @@ import {
   purchasePage,
   readPurchase,
   validCart,
-  validOption,
+  validOptionRow,
+  isUnavailable,
   validProduct,
   validQuote,
   writePurchase,
@@ -33,7 +40,7 @@ import {
   forgetAddressAttempt,
   continueShopping,
 } from "../lib/purchase";
-import type { Cart, Product, Option, Quote, Order } from "../lib/purchase";
+import type { Cart, Product, OptionRow, Quote, Order } from "../lib/purchase";
 
 export default function ProductPurchase({
   locale: initialLocale,
@@ -64,7 +71,7 @@ export default function ProductPurchase({
     "failed" | "session" | "conflict" | "pending" | null
   >(null);
   const [deliveryOpen, setDeliveryOpen] = useState(false);
-  const [options, setOptions] = useState<Option[]>([]);
+  const [options, setOptions] = useState<OptionRow[]>([]);
   const [optionCursor, setOptionCursor] = useState("");
   const [method, setMethod] = useState("");
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -86,7 +93,9 @@ export default function ProductPurchase({
   const subtotal = selected
     ? lineSubtotal(selected.price_minor, Number(quantity))
     : null;
-  const chosen = options.find((o) => optionKey(o) === method);
+  const found = options.find((o) => optionKey(o) === method);
+  // Unavailable rows are listed disabled, so they can never be the chosen delivery.
+  const chosen = found && !isUnavailable(found) ? found : undefined;
   const draftKey = (ctx: string) =>
     `commerce-product-selection-v1:${ctx}:${productID}`;
   const money = (amount: number, currency: string) => {
@@ -410,13 +419,16 @@ export default function ProductPurchase({
     const page = await purchasePage(
       `checkout-options?limit=100${nextCursor ? `&cursor=${encodeURIComponent(nextCursor)}` : ""}`,
       context,
-      validOption,
+      validOptionRow,
     );
     if (version !== epoch.current || context !== currentContext.current) return;
     const rows = page.items.filter((o) => o.currency === cart?.currency);
     setOptions((old) => (nextCursor ? [...old, ...rows] : rows));
     setOptionCursor(page.next_cursor);
-    if (!nextCursor) setMethod(rows[0] ? optionKey(rows[0]) : "");
+    if (!nextCursor) {
+      const first = rows.find((o) => !isUnavailable(o));
+      setMethod(first ? optionKey(first) : "");
+    }
     setDeliveryOpen(true);
     requestAnimationFrame(() =>
       deliveryRef.current?.scrollIntoView({ behavior: "auto", block: "start" }),
@@ -744,17 +756,24 @@ export default function ProductPurchase({
                       }}
                     >
                       {options.map((o) => (
-                        <option key={optionKey(o)} value={optionKey(o)}>
+                        <option
+                          key={optionKey(o)}
+                          value={optionKey(o)}
+                          disabled={isUnavailable(o)}
+                        >
                           {locale === "zh-CN"
                             ? o.name_hans
                             : locale === "zh-TW"
                               ? o.name_hant
                               : o.name_en}{" "}
                           · {o.country}
+                          {isUnavailable(o) ? ` · ${cvsCopy[locale].comingSoon}` : ""}
                         </option>
                       ))}
                     </select>
-                    {chosen?.delivery_kind !== "home" && <p>{copy.cvs}</p>}
+                    {chosen && chosen.delivery_kind !== "home" && (
+                      <p data-testid="cvs-next-step">{copy.cvs}</p>
+                    )}
                   </>
                 )}
                 {optionCursor && (
@@ -891,9 +910,7 @@ export default function ProductPurchase({
                 error === "session" ||
                 pending ||
                 subtotal === null ||
-                (!quote &&
-                  deliveryOpen &&
-                  (!chosen || chosen.delivery_kind !== "home"))
+                (!quote && deliveryOpen && !chosen)
               }
               onClick={() =>
                 void act(async (isCurrent) => {

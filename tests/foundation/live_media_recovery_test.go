@@ -1588,15 +1588,25 @@ END $$`, h.plan.OperationID)
 		h.plan.OperationID).Scan(&baseline); err != nil || *qualified.generation <= baseline {
 		t.Fatalf("pre-admission or stale observation accepted: generation=%v baseline=%d err=%v", qualified.generation, baseline, err)
 	}
+	// The 90 s clock is the episode's own deadline_at (set by the supervisor from its episode start, DB clock), not
+	// the test's launch instant: under a loaded full-suite run the episode starts seconds after launch, and the
+	// fixture gate (deadline_at-3s) plus the supervisor's 1 s tick then fell past launched+89s (R2 release gate
+	// 2026-09-30: blocked=false elapsed=1m29s). The DB-side remaining time is mapped onto the local monotonic clock.
+	var remainingMS int64
+	if err := h.lp.f.owner.QueryRow(ctx, `SELECT (extract(epoch FROM deadline_at-clock_timestamp())*1000)::bigint
+	 FROM live.media_recovery_episode_scope WHERE episode_id=$1::uuid`, episode).Scan(&remainingMS); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Duration(remainingMS) * time.Millisecond)
 	var blocked bool
-	for time.Now().Before(launched.Add(89 * time.Second)) {
-		if time.Since(launched) < 87*time.Second {
+	for time.Now().Before(deadline.Add(-300 * time.Millisecond)) {
+		if time.Until(deadline) > 3*time.Second {
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		if err := h.lp.f.owner.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity a
-          WHERE a.state='active' AND a.query LIKE '%witness_media_recovery_episode%'
-           AND a.query_start>=$2 AND $1=ANY(pg_blocking_pids(a.pid)))`, holderPID, launched.Add(86*time.Second)).Scan(&blocked); err != nil {
+		if err := h.lp.f.owner.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity a, live.media_recovery_episode_scope s
+          WHERE s.episode_id=$2::uuid AND a.state='active' AND a.query LIKE '%witness_media_recovery_episode%'
+           AND a.query_start>=s.deadline_at-interval '4 seconds' AND $1=ANY(pg_blocking_pids(a.pid)))`, holderPID, episode).Scan(&blocked); err != nil {
 			t.Fatal(err)
 		}
 		if blocked {
@@ -1604,20 +1614,21 @@ END $$`, h.plan.OperationID)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !blocked || time.Since(launched) >= 90*time.Second {
-		t.Fatalf("fixture did not place a timely parent Witness behind original-operation lock: blocked=%v elapsed=%s", blocked, time.Since(launched))
+	if !blocked || !time.Now().Before(deadline) {
+		t.Fatalf("fixture did not place a timely parent Witness behind original-operation lock: blocked=%v to_deadline=%s since_launch=%s",
+			blocked, time.Until(deadline), time.Since(launched))
 	}
-	if wait := time.Until(launched.Add(90*time.Second + 200*time.Millisecond)); wait > 0 {
+	if wait := time.Until(deadline.Add(200 * time.Millisecond)); wait > 0 {
 		time.Sleep(wait)
 	}
 	if _, err := holder.Exec(ctx, `SELECT pg_advisory_unlock(824,501234)`); err != nil {
 		t.Fatal(err)
 	}
 	locked = false
-	read := mrrWaitReadback(t, recovery, episode, launched.Add(98*time.Second), func(r mrrReadback) bool { return r.disposition == "witnessed" })
-	if time.Since(launched) < 90*time.Second || read.scope != "finished" || read.timeoutAt != nil ||
+	read := mrrWaitReadback(t, recovery, episode, deadline.Add(8*time.Second), func(r mrrReadback) bool { return r.disposition == "witnessed" })
+	if time.Now().Before(deadline) || read.scope != "finished" || read.timeoutAt != nil ||
 		read.obs == nil || *read.obs != *qualified.obs || read.witnessElapsed == nil || *read.witnessElapsed >= 90000 {
-		t.Fatalf("timely parent readback did not retain post90 Witness: %+v elapsed=%s", read, time.Since(launched))
+		t.Fatalf("timely parent readback did not retain post90 Witness: %+v past_deadline=%s", read, -time.Until(deadline))
 	}
 	log, err := os.ReadFile(parent.logPath)
 	if err != nil {

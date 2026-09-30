@@ -2,7 +2,9 @@ package checkout
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,5 +55,67 @@ func TestPaymentViewBoundedShape(t *testing.T) {
 func TestPaymentViewNotFoundMapping(t *testing.T) {
 	if !errors.Is(safeError(context.Background(), &pgconn.PgError{Code: "PT404"}), command.ErrNotFound) {
 		t.Fatal("private missing/foreign order must not become database unavailable")
+	}
+}
+
+func TestPaymentViewRefundStatesAreStripeOnlyAndConsistent(t *testing.T) {
+	const order = "00000000-0000-4000-8000-000000000001"
+	cancel := false
+	base := OrderPayment{OrderID: order, Currency: "HKD", TotalMinor: 10000, CommercialState: "CONFIRMED", TestMode: true,
+		PaymentState: "PARTIALLY_REFUNDED", HandoffState: "CLOSED", Methods: []PaymentMethodOption{}, CancelRequested: &cancel,
+		Refund: &OrderRefund{RefundedMinor: 4000, PendingMinor: 1000}}
+	expires := time.Now().UTC()
+	base.HandoffExpiresAt = &expires
+	if !validPaymentViewFor(base, order, true) {
+		t.Fatal("valid partial refund view rejected")
+	}
+	if validPaymentViewFor(base, order, false) {
+		t.Fatal("v1 (PAYUNi) must never accept a refund state")
+	}
+	full := base
+	full.PaymentState, full.Refund = "REFUNDED", &OrderRefund{RefundedMinor: 10000}
+	if !validPaymentViewFor(full, order, true) {
+		t.Fatal("valid full refund view rejected")
+	}
+	for name, change := range map[string]func(*OrderPayment){
+		"refunded but total not covered": func(v *OrderPayment) { v.PaymentState = "REFUNDED" },
+		"partial but fully refunded":     func(v *OrderPayment) { v.Refund = &OrderRefund{RefundedMinor: 10000} },
+		"refund state without totals":    func(v *OrderPayment) { v.Refund = nil },
+		"nothing refunded yet":           func(v *OrderPayment) { v.Refund = &OrderRefund{PendingMinor: 100} },
+		"over total":                     func(v *OrderPayment) { v.Refund = &OrderRefund{RefundedMinor: 9000, PendingMinor: 2000} },
+		"negative pending":               func(v *OrderPayment) { v.Refund = &OrderRefund{RefundedMinor: 4000, PendingMinor: -1} },
+	} {
+		v := base
+		change(&v)
+		if validPaymentViewFor(v, order, true) {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	// A pending-only refund keeps the base state and still shows the processing amount.
+	pending := base
+	pending.PaymentState, pending.Refund = "CAPTURED", &OrderRefund{PendingMinor: 2500}
+	if !validPaymentViewFor(pending, order, true) {
+		t.Fatal("pending refund on a captured order rejected")
+	}
+	// dropCancelUnlessStripe (D8): only Stripe-attempt orders may expose the refund totals.
+	dropCancelUnlessStripe(&pending, false)
+	if pending.Refund != nil || pending.CancelRequested != nil {
+		t.Fatal("non-Stripe order kept refund or cancel_requested")
+	}
+	kept := base
+	dropCancelUnlessStripe(&kept, true)
+	if kept.Refund == nil || kept.CancelRequested == nil {
+		t.Fatal("Stripe order lost its projection")
+	}
+}
+
+func TestPaymentViewRefundJSONIsOmittedWhenAbsent(t *testing.T) {
+	raw, err := json.Marshal(OrderPayment{OrderID: "x", Methods: []PaymentMethodOption{}})
+	if err != nil || strings.Contains(string(raw), "refund") {
+		t.Fatalf("PAYUNi bytes must not gain a refund key: %s %v", raw, err)
+	}
+	raw, _ = json.Marshal(OrderPayment{OrderID: "x", Refund: &OrderRefund{RefundedMinor: 1}})
+	if !strings.Contains(string(raw), `"refund":{"refunded_minor":1,"pending_minor":0}`) {
+		t.Fatalf("refund shape: %s", raw)
 	}
 }

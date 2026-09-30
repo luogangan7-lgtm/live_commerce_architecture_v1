@@ -1,0 +1,11 @@
+# RED proof SP11 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: reference RefreshPayment/CancelPayment keeps the InsertTx job when the SQL answers scheduled=false (orphan job)
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP11BuyerSignals$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_flow_test.go:902: cancel: checkout database unavailable
+--- FAIL: TestStripeSP11BuyerSignals (5.22s)
+FAIL
+FAIL	livecommerce/tests/foundation	6.007s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

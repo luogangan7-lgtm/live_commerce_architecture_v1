@@ -1,0 +1,3679 @@
+From 8a3c27afc67c9054c9ae95dc6590429d8bb96122 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 28 Sep 2026 13:26:34 +0000
+Subject: [PATCH] WIP(test): T10 PG gate tests KC02-KC15 (interrupted,
+ unrun/unreviewed)
+
+Interrupted by budget pause 2026-09-28. The independent test_worker had not
+reported results yet. Treat as a draft.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01JteRiLhGBXZ4UzNCqjoeFy
+---
+ tests/foundation/live_claims_ingest_test.go | 1258 +++++++++++++++++++
+ tests/foundation/live_claims_schema_test.go | 1258 +++++++++++++++++++
+ tests/foundation/live_claims_test.go        | 1122 +++++++++++++++++
+ 3 files changed, 3638 insertions(+)
+ create mode 100644 tests/foundation/live_claims_ingest_test.go
+ create mode 100644 tests/foundation/live_claims_schema_test.go
+ create mode 100644 tests/foundation/live_claims_test.go
+
+diff --git a/tests/foundation/live_claims_ingest_test.go b/tests/foundation/live_claims_ingest_test.go
+new file mode 100644
+index 0000000..711fb25
+--- /dev/null
++++ b/tests/foundation/live_claims_ingest_test.go
+@@ -0,0 +1,1258 @@
++// T10 claims ingest and manual-entry gates (independent test_worker; contract
++// contracts/live-keyword-claims-v1.md §2.3-§2.4, §3.1, §4.2 RecordManualClaim, §4.3
++// Ingest, §5, §8, §9 KC06/KC07/KC08, §0.1 P2(b)-(e)).
++//
++// Owns: KC06 (every §2.4 ingest vector and S01-S05, the §3.1 event shape per reason,
++// dedup on immutable facts, occurred_at bounds, validation, "claims touch nothing else"),
++// KC07 (real parallel transactions: duplicate delivery, same-actor rapid set-quantity,
++// the close-S1/open-S2 interleave, deactivate vs ingest, release vs redeem, two owners
++// racing, cart lock ordering, a mixed workload with zero 40P01), KC08 (receipt replay,
++// label_mac behaviour and a sentinel scan of the database and the PostgreSQL server log)
++// and P2(b) label privacy, P2(c) reconstructible duplicates, P2(d) label normalization,
++// P2(e) match_mode transitions.
++//
++// Non-goals: grammar vectors themselves (KC01), links/preview/redeem semantics beyond
++// what the concurrency cases need (KC09-KC11), HTTP (KC13/KC14). Waits are observed in
++// pg_stat_activity (lpWaitLock), never by sleeping.
++//
++// Depends on: lcHarness (live_claims_test.go) and its helpers; claims.Ingest/IngestParsed
++// called directly in merchant transactions (the contract's only-caller rule is a source
++// guard, KC15, not a runtime restriction on tests); storefront (GetCart/SetCart/
++// CreateQuote/LockCartOwner) and live (GetDraft/UpdateDraft) for the mixed workload;
++// docker logs of the labelled fixture container for PG server-log capture.
++package foundation_test
++
++import (
++	"context"
++	"encoding/hex"
++	"errors"
++	"fmt"
++	"net/url"
++	"os/exec"
++	"reflect"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/jackc/pgx/v5"
++
++	"livecommerce/internal/buyer"
++	"livecommerce/internal/claims"
++	"livecommerce/internal/claims/grammar"
++	"livecommerce/internal/command"
++	"livecommerce/internal/live"
++	"livecommerce/internal/platform"
++	"livecommerce/internal/storefront"
++)
++
++func lcActor() string { return hex.EncodeToString(randomBytes(32)) }
++
++// dbNow is the database clock in UTC with microsecond precision (IngestInput.OccurredAt).
++func (h *lcHarness) dbNow(t *testing.T) time.Time {
++	t.Helper()
++	var now time.Time
++	if err := h.f.owner.QueryRow(h.ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
++		t.Fatal(err)
++	}
++	return now.UTC().Truncate(time.Microsecond)
++}
++
++func (h *lcHarness) ingestIn(session, actor, label, text string, at time.Time) claims.IngestInput {
++	return claims.IngestInput{TenantID: h.f.tenantA, StoreID: h.f.storeA1, SessionID: session, SourceKind: "manual", SourceEventID: randomUUID(),
++		Platform: "manual", ActorKey: actor, ActorLabel: label, PrincipalID: h.actor, Text: text, OccurredAt: at}
++}
++
++func (h *lcHarness) ingest(in claims.IngestInput) (out claims.IngestResult, err error) {
++	err = h.do(h.token, h.f.storeA1, func(tx pgx.Tx, _ platform.Scope) (e error) {
++		out, e = claims.Ingest(h.ctx, tx, in)
++		return e
++	})
++	return out, err
++}
++
++func (h *lcHarness) ingestParsed(in claims.IngestInput, p grammar.Result) (out claims.IngestResult, err error) {
++	err = h.do(h.token, h.f.storeA1, func(tx pgx.Tx, _ platform.Scope) (e error) {
++		out, e = claims.IngestParsed(h.ctx, tx, in, p)
++		return e
++	})
++	return out, err
++}
++
++// lcEventRow is one persisted claims.events row with NULLs mapped to zero values.
++type lcEventRow struct {
++	session, source, sourceKind, platform, grammarVersion, kind, mode, outcome, reason, offer, bundle, principal string
++	generation, quantity, lineVersion, previous                                                              int64
++	explicit                                                                                                 *bool
++}
++
++func lcEvent(t *testing.T, f *testFixture, id string) (e lcEventRow) {
++	t.Helper()
++	err := f.owner.QueryRow(context.Background(), `SELECT session_id::text,source_event_id::text,source_kind,platform,grammar_version,grammar_kind,match_mode,outcome,
++		coalesce(reason,''),coalesce(offer_id::text,''),coalesce(bundle_id::text,''),coalesce(principal_id::text,''),window_generation,
++		coalesce(quantity,0),coalesce(line_version,0),coalesce(previous_quantity,0),explicit_quantity FROM claims.events WHERE id=$1`, id).
++		Scan(&e.session, &e.source, &e.sourceKind, &e.platform, &e.grammarVersion, &e.kind, &e.mode, &e.outcome, &e.reason, &e.offer, &e.bundle, &e.principal,
++			&e.generation, &e.quantity, &e.lineVersion, &e.previous, &e.explicit)
++	if err != nil {
++		t.Fatalf("read event %s: %v", id, err)
++	}
++	return e
++}
++
++// lcWant is the expected §3.1 shape of one ingest outcome.
++type lcWant struct {
++	outcome        string
++	reason         claims.Reason
++	kind           string
++	offer          *claims.Offer
++	qty            int64 // 0 = NULL
++	explicit       *bool // nil = NULL
++	prev, line     int64 // ACCEPTED only
++	mode           string
++	generation     int64
++	bundleExpected string // ACCEPTED on an existing bundle
++}
++
++func lcBool(b bool) *bool { return &b }
++
++// checkIngest asserts the result and the persisted event against the §3.1 matrix.
++func (h *lcHarness) checkIngest(t *testing.T, label string, in claims.IngestInput, r claims.IngestResult, err error, w lcWant) {
++	t.Helper()
++	if err != nil {
++		t.Fatalf("%s: %v", label, err)
++	}
++	accepted := w.outcome == claims.OutcomeAccepted
++	offerID, keyword := "", ""
++	if w.offer != nil {
++		offerID, keyword = w.offer.ID, w.offer.Keyword
++	}
++	if r.Outcome != w.outcome || r.Reason != w.reason || r.Duplicate || !command.ValidID(r.EventID) || r.SessionID != in.SessionID || r.GrammarVersion != "kw-v1" ||
++		r.WindowGeneration != w.generation || r.OfferID != offerID || r.Keyword != keyword || r.Quantity != w.qty {
++		t.Fatalf("%s: result %+v, want %+v", label, r, w)
++	}
++	if accepted != command.ValidID(r.BundleID) || (accepted && (r.LineVersion != w.line || r.PreviousQuantity != w.prev || r.BundleVersion < 1)) ||
++		(!accepted && (r.LineVersion != 0 || r.PreviousQuantity != 0)) || (w.bundleExpected != "" && r.BundleID != w.bundleExpected) {
++		t.Fatalf("%s: bundle/line fields %+v, want %+v", label, r, w)
++	}
++	e := lcEvent(t, h.f, r.EventID)
++	reason := string(w.reason)
++	bundle := ""
++	if accepted {
++		bundle = r.BundleID
++	}
++	if e.session != in.SessionID || e.source != in.SourceEventID || e.sourceKind != "manual" || e.platform != "manual" || e.grammarVersion != "kw-v1" ||
++		e.kind != w.kind || e.mode != w.mode || e.outcome != w.outcome || e.reason != reason || e.offer != offerID || e.bundle != bundle || e.principal != h.actor ||
++		e.generation != w.generation || e.quantity != w.qty || e.lineVersion != r.LineVersion || e.previous != r.PreviousQuantity ||
++		(e.explicit == nil) != (w.explicit == nil) || (e.explicit != nil && *e.explicit != *w.explicit) {
++		t.Fatalf("%s: persisted event %+v, want %+v", label, e, w)
++	}
++	if !accepted && countRows(t, h.f.owner, `SELECT count(*) FROM claims.bundles WHERE actor_key=$1`, in.ActorKey) != 0 && w.bundleExpected == "" {
++		t.Fatalf("%s: a rejected first command created a bundle", label)
++	}
++}
++
++// TestLiveClaimsKC06Ingest is KC06 (§2.3 precedence, §2.4 ingest vectors, §3.1, §4.3).
++func TestLiveClaimsKC06Ingest(t *testing.T) {
++	h := lcSetup(t)
++	f := h.f
++	s := h.draft(t, f.storeA1)
++	quiet := lcDigest(t, f, "inventory", "storefront", "checkout", "buyer", "social", "meta_inbox")
++	eventCount := func() int { return countRows(t, f.owner, `SELECT count(*) FROM claims.events WHERE session_id=$1`, s) }
++
++	// I08 before the window row exists: WINDOW_CLOSED, nothing persisted.
++	in := h.ingestIn(s, lcActor(), "never-open", "A1", h.dbNow(t))
++	if r, err := h.ingest(in); err != nil || r.Outcome != claims.OutcomeRejected || r.Reason != claims.ReasonWindowClosed || r.EventID != "" || r.WindowGeneration != 0 || r.BundleID != "" {
++		t.Fatalf("I08 without window: %+v %v", r, err)
++	}
++	w := h.open(t, s, claims.MatchExact)
++	a1 := h.offer(t, s, "A1", h.stock.skus[0].ID, 3)
++	b2 := h.offer(t, s, "B2", h.stock.skus[1].ID, 999)
++	gen := w.Generation
++	t0, f0 := false, true
++	vector := func(label, text string, want lcWant) claims.IngestResult {
++		t.Helper()
++		in := h.ingestIn(s, lcActor(), "v-"+t04Tag(), text, h.dbNow(t))
++		want.generation = gen
++		if want.mode == "" {
++			want.mode = "EXACT"
++		}
++		r, err := h.ingest(in)
++		h.checkIngest(t, label+" "+fmt.Sprintf("%q", text), in, r, err, want)
++		return r
++	}
++	rej := func(reason claims.Reason, kind string, offer *claims.Offer, qty int64, explicit *bool) lcWant {
++		return lcWant{outcome: claims.OutcomeRejected, reason: reason, kind: kind, offer: offer, qty: qty, explicit: explicit}
++	}
++	vector("I01", "A1", lcWant{outcome: claims.OutcomeAccepted, kind: "MATCH", offer: &a1, qty: 1, explicit: &t0, line: 1})
++	vector("I01 width", "ａ１＋２", lcWant{outcome: claims.OutcomeAccepted, kind: "MATCH", offer: &a1, qty: 2, explicit: &f0, line: 1})
++	vector("B2 max", "B2+999", lcWant{outcome: claims.OutcomeAccepted, kind: "MATCH", offer: &b2, qty: 999, explicit: &f0, line: 1})
++	vector("I02", "A1+5", rej(claims.ReasonQuantityOverMax, "MATCH", &a1, 5, &f0))
++	for _, text := range []string{"Z9", "0912345678", "a1x2", "ABCDEFGHIJKLMNOP"} {
++		vector("I03", text, rej(claims.ReasonUnknownKeyword, "MATCH", nil, 0, nil))
++	}
++	vector("I03 invalid", "0912345678+0", rej(claims.ReasonUnknownKeyword, "INVALID_QUANTITY", nil, 0, nil))
++	vector("I04", "A1+0", rej(claims.ReasonInvalidQuantity, "INVALID_QUANTITY", &a1, 0, nil))
++	vector("I04 B2", "B2+1000", rej(claims.ReasonInvalidQuantity, "INVALID_QUANTITY", &b2, 0, nil))
++	vector("I04 leading zero", "A1+02", rej(claims.ReasonInvalidQuantity, "INVALID_QUANTITY", &a1, 0, nil))
++	for _, text := range []string{"不要A1", "A1 +2", "A1+", "A1 B2", "A1是不是红色", "A1+2 謝謝", "#A1", "A1​", "  "} {
++		vector("I07", text, rej(claims.ReasonNoMatch, "NO_MATCH", nil, 0, nil))
++	}
++	vector("R07 long", "A1"+strings.Repeat(" ", 300), rej(claims.ReasonNoMatch, "NO_MATCH", nil, 0, nil))
++
++	// S01 same actor A1 -> A1+3 -> A1+2 -> A1; S02 redelivery; changed facts 409.
++	actor := lcActor()
++	var sIn []claims.IngestInput
++	var sOut []claims.IngestResult
++	var bundle string
++	for i, step := range []struct {
++		text     string
++		qty      int64
++		explicit bool
++		prev     int64
++	}{{"A1", 1, false, 0}, {"A1+3", 3, true, 1}, {"A1+2", 2, true, 3}, {"A1", 1, false, 2}} {
++		in := h.ingestIn(s, actor, "s01", step.text, h.dbNow(t))
++		r, err := h.ingest(in)
++		h.checkIngest(t, "S01 "+step.text, in, r, err, lcWant{outcome: claims.OutcomeAccepted, kind: "MATCH", offer: &a1, qty: step.qty, explicit: lcBool(step.explicit),
++			prev: step.prev, line: int64(i + 1), mode: "EXACT", generation: gen, bundleExpected: bundle})
++		if r.BundleVersion != int64(i+1) {
++			t.Fatalf("S01 bundle version %d at step %d", r.BundleVersion, i+1)
++		}
++		bundle = r.BundleID
++		sIn, sOut = append(sIn, in), append(sOut, r)
++	}
++	var lineQty, lineVersion int64
++	lineOf := func() {
++		t.Helper()
++		if err := f.owner.QueryRow(h.ctx, `SELECT quantity,version FROM claims.lines WHERE bundle_id=$1 AND offer_id=$2`, bundle, a1.ID).Scan(&lineQty, &lineVersion); err != nil {
++			t.Fatal(err)
++		}
++	}
++	lineOf()
++	if lineQty != 1 || lineVersion != 4 {
++		t.Fatalf("S01 line %d v%d", lineQty, lineVersion)
++	}
++	before := eventCount()
++	for _, redelivery := range []claims.IngestInput{sIn[1], func() claims.IngestInput { x := sIn[1]; x.Text = "Ａ１＋３"; return x }()} {
++		dup, err := h.ingest(redelivery)
++		want := sOut[1]
++		want.Duplicate = true
++		if err != nil || !reflect.DeepEqual(dup, want) {
++			t.Fatalf("S02 redelivery %+v %v, want %+v", dup, err, want)
++		}
++	}
++	lineOf()
++	if lineQty != 1 || lineVersion != 4 || eventCount() != before {
++		t.Fatal("S02 duplicate wrote")
++	}
++	for label, in := range map[string]claims.IngestInput{
++		"text":     func() claims.IngestInput { x := sIn[1]; x.Text = "A1+2"; return x }(),
++		"implicit": func() claims.IngestInput { x := sIn[0]; x.Text = "A1+1"; return x }(),
++		"offer":    func() claims.IngestInput { x := sIn[1]; x.Text = "B2+3"; return x }(),
++		"kind":     func() claims.IngestInput { x := sIn[1]; x.Text = "不要"; return x }(),
++		"occurred": func() claims.IngestInput { x := sIn[1]; x.OccurredAt = x.OccurredAt.Add(time.Microsecond); return x }(),
++		"session":  func() claims.IngestInput { x := sIn[1]; x.SessionID = h.draft(t, f.storeA1); return x }(),
++		"actor":    func() claims.IngestInput { x := sIn[1]; x.ActorKey = lcActor(); return x }(),
++	} {
++		lcIs(t, lcErr(h.ingest(in)), command.ErrConflict, "duplicate source with changed "+label)
++	}
++	if eventCount() != before {
++		t.Fatal("conflicting redeliveries wrote")
++	}
++	// Only immutable facts are compared: a NO_MATCH source redelivered by another actor
++	// with other NO_MATCH text is the same fact (text is never stored, §4.3 step 2).
++	noMatch := h.ingestIn(s, lcActor(), "nm", "不要A1", h.dbNow(t))
++	first, err := h.ingest(noMatch)
++	if err != nil {
++		t.Fatal(err)
++	}
++	other := noMatch
++	other.ActorKey, other.Text = lcActor(), "A1 謝謝"
++	if dup, err := h.ingest(other); err != nil || !dup.Duplicate || dup.EventID != first.EventID || dup.Reason != claims.ReasonNoMatch {
++		t.Fatalf("NO_MATCH redelivery %+v %v", dup, err)
++	}
++	// S03 unknown keyword -> CreateOffer -> redelivery stays a duplicate UNKNOWN_KEYWORD.
++	z9In := h.ingestIn(s, lcActor(), "s03", "Z9+2", h.dbNow(t))
++	z9, err := h.ingest(z9In)
++	if err != nil || z9.Reason != claims.ReasonUnknownKeyword {
++		t.Fatalf("S03 first %+v %v", z9, err)
++	}
++	h.offer(t, s, "Z9", lcSKUs(t, f, f.tenantA, f.storeA1, "USD", 1)[0], 5)
++	n := eventCount()
++	if dup, err := h.ingest(z9In); err != nil || !dup.Duplicate || dup.Reason != claims.ReasonUnknownKeyword || dup.OfferID != "" || dup.EventID != z9.EventID || eventCount() != n {
++		t.Fatalf("S03 redelivery %+v %v", dup, err)
++	}
++	// S05 new manual actor via actor_label, then bundle_id with an empty label: one bundle, label unchanged.
++	s05 := h.accepted(t, s, "", "@S05-"+strings.ToUpper(t04Tag()[:4]), "A1")
++	s05b := h.accepted(t, s, s05.BundleID, "", "B2")
++	var label string
++	var lineCount int
++	if err := f.owner.QueryRow(h.ctx, `SELECT label,line_count FROM claims.bundles WHERE id=$1`, s05.BundleID).Scan(&label, &lineCount); err != nil ||
++		s05b.BundleID != s05.BundleID || !strings.HasPrefix(label, "s05-") || lineCount != 2 {
++		t.Fatalf("S05 bundle label=%q lines=%d %v", label, lineCount, err)
++	}
++
++	// occurred_at bounds: before opened_at -> WINDOW_CLOSED (not persisted); +100 s ok; +125 s invalid.
++	n = eventCount()
++	early := h.ingestIn(s, lcActor(), "early", "A1", w.OpenedAt.UTC().Add(-time.Microsecond).Truncate(time.Microsecond))
++	if r, err := h.ingest(early); err != nil || r.Reason != claims.ReasonWindowClosed || r.EventID != "" || eventCount() != n {
++		t.Fatalf("occurred before opened_at %+v %v", r, err)
++	}
++	if r, err := h.ingest(h.ingestIn(s, lcActor(), "future-ok", "A1", h.dbNow(t).Add(100*time.Second))); err != nil || r.Outcome != claims.OutcomeAccepted {
++		t.Fatalf("occurred +100s %+v %v", r, err)
++	}
++	lcIs(t, lcErr(h.ingest(h.ingestIn(s, lcActor(), "future-bad", "A1", h.dbNow(t).Add(125*time.Second)))), command.ErrInvalid, "occurred beyond +120s")
++
++	// Validation -> ErrInvalid (§4.3 step 1), before any write.
++	n = eventCount()
++	base := h.ingestIn(s, lcActor(), "valid", "A1", h.dbNow(t))
++	mut := func(fn func(*claims.IngestInput)) claims.IngestInput { x := base; x.SourceEventID = randomUUID(); fn(&x); return x }
++	for label, in := range map[string]claims.IngestInput{
++		"meta source": mut(func(x *claims.IngestInput) { x.SourceKind = "meta" }), "empty source": mut(func(x *claims.IngestInput) { x.SourceKind = "" }),
++		"platform": mut(func(x *claims.IngestInput) { x.Platform = "facebook" }), "actor upper": mut(func(x *claims.IngestInput) { x.ActorKey = strings.ToUpper(x.ActorKey) }),
++		"actor short": mut(func(x *claims.IngestInput) { x.ActorKey = x.ActorKey[:63] }), "tenant": mut(func(x *claims.IngestInput) { x.TenantID = f.tenantB }),
++		"store": mut(func(x *claims.IngestInput) { x.StoreID = f.storeA2 }), "principal": mut(func(x *claims.IngestInput) { x.PrincipalID = randomUUID() }),
++		"session": mut(func(x *claims.IngestInput) { x.SessionID = "not-a-uuid" }), "source id": mut(func(x *claims.IngestInput) { x.SourceEventID = "not-a-uuid" }),
++		"zero time": mut(func(x *claims.IngestInput) { x.OccurredAt = time.Time{} }), "text 64KiB+1": mut(func(x *claims.IngestInput) { x.Text = strings.Repeat("A", 65537) }),
++	} {
++		lcIs(t, lcErr(h.ingest(in)), command.ErrInvalid, "Ingest "+label)
++	}
++	if r, err := h.ingest(mut(func(x *claims.IngestInput) { x.Text = "A1" + strings.Repeat(" ", 65534) })); err != nil || r.Reason != claims.ReasonNoMatch {
++		t.Fatalf("64 KiB text is valid input and NO_MATCH: %+v %v", r, err)
++	}
++	n = eventCount()
++	parsed := grammar.Parse("A1+2")
++	for label, tc := range map[string]struct {
++		in claims.IngestInput
++		p  grammar.Result
++	}{
++		"text with parsed": {mut(func(x *claims.IngestInput) {}), parsed},
++		"version":          {mut(func(x *claims.IngestInput) { x.Text = "" }), grammar.Result{Version: "kw-v2", Kind: grammar.Match, Keyword: "A1", Quantity: 1}},
++		"zero quantity":    {mut(func(x *claims.IngestInput) { x.Text = "" }), grammar.Result{Version: grammar.Version, Kind: grammar.Match, Keyword: "A1"}},
++		"quantity 1000":    {mut(func(x *claims.IngestInput) { x.Text = "" }), grammar.Result{Version: grammar.Version, Kind: grammar.Match, Keyword: "A1", Quantity: 1000, Explicit: true}},
++		"lowercase":        {mut(func(x *claims.IngestInput) { x.Text = "" }), grammar.Result{Version: grammar.Version, Kind: grammar.Match, Keyword: "a1", Quantity: 1}},
++		"no-match keyword": {mut(func(x *claims.IngestInput) { x.Text = "" }), grammar.Result{Version: grammar.Version, Kind: grammar.NoMatch, Keyword: "A1"}},
++		"unknown kind":     {mut(func(x *claims.IngestInput) { x.Text = "" }), grammar.Result{Version: grammar.Version, Kind: "PARTIAL", Keyword: "A1", Quantity: 1}},
++	} {
++		lcIs(t, lcErr(h.ingestParsed(tc.in, tc.p)), command.ErrInvalid, "IngestParsed "+label)
++	}
++	if r, err := h.ingestParsed(mut(func(x *claims.IngestInput) { x.Text = "" }), parsed); err != nil || r.Outcome != claims.OutcomeAccepted || r.Quantity != 2 {
++		t.Fatalf("IngestParsed positive control %+v %v", r, err)
++	}
++	lcIs(t, lcErr(h.ingest(mut(func(x *claims.IngestInput) { x.ActorLabel = "" }))), command.ErrInvalid, "new bundle without ActorLabel")
++	rr, err := h.f.runtime.BeginTx(h.ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = rr.Exec(h.ctx, `SELECT set_config('app.tenant_id',$1,true),set_config('app.store_id',$2,true),set_config('app.principal_id',$3,true)`, f.tenantA, f.storeA1, h.actor); err != nil {
++		t.Fatal(err)
++	}
++	_, err = claims.Ingest(h.ctx, rr, mut(func(x *claims.IngestInput) {}))
++	_ = rr.Rollback(h.ctx)
++	lcIs(t, err, command.ErrInvalid, "REPEATABLE READ ingest")
++	if eventCount() != n+1 {
++		t.Fatalf("invalid ingests wrote rows: %d -> %d", n, eventCount())
++	}
++
++	// I05 KEYWORD_QTY_ONLY (mode changes only while CLOSED; opening increments generation).
++	w = h.open(t, s, claims.MatchKeywordQtyOnly)
++	gen = w.Generation
++	if gen != 2 {
++		t.Fatalf("second opening generation %d", gen)
++	}
++	vector("I05", "A1", lcWant{outcome: claims.OutcomeRejected, reason: claims.ReasonQuantityRequired, kind: "MATCH", offer: &a1, qty: 1, explicit: &t0, mode: "KEYWORD_QTY_ONLY"})
++	vector("I05", "A1+3", lcWant{outcome: claims.OutcomeAccepted, kind: "MATCH", offer: &a1, qty: 3, explicit: &f0, line: 1, mode: "KEYWORD_QTY_ONLY"})
++	vector("I05 over max", "A1+4", lcWant{outcome: claims.OutcomeRejected, reason: claims.ReasonQuantityOverMax, kind: "MATCH", offer: &a1, qty: 4, explicit: &f0, mode: "KEYWORD_QTY_ONLY"})
++	vector("I05 invalid first", "A1+0", lcWant{outcome: claims.OutcomeRejected, reason: claims.ReasonInvalidQuantity, kind: "INVALID_QUANTITY", offer: &a1, mode: "KEYWORD_QTY_ONLY"})
++	// I06 inactive offer and occurred_at < activated_at.
++	w = h.open(t, s, claims.MatchExact)
++	gen = w.Generation
++	inactive := h.setOffer(t, s, h.board(t, s).Offers[0], 3, false)
++	vector("I06", "A1", rej(claims.ReasonOfferInactive, "MATCH", &inactive, 1, &t0))
++	vector("I06 explicit", "A1+2", rej(claims.ReasonOfferInactive, "MATCH", &inactive, 2, &f0))
++	vector("I06 invalid", "A1+0", rej(claims.ReasonOfferInactive, "INVALID_QUANTITY", &inactive, 0, nil))
++	vector("I06 over max", "A1+9", rej(claims.ReasonOfferInactive, "MATCH", &inactive, 9, &f0))
++	active := h.setOffer(t, s, inactive, 3, true)
++	beforeActivation := active.ActivatedAt.UTC().Add(-time.Microsecond).Truncate(time.Microsecond)
++	if !beforeActivation.After(*w.OpenedAt) {
++		t.Fatalf("fixture timing: activated_at %v not after opened_at %v", active.ActivatedAt, w.OpenedAt)
++	}
++	lateIn := h.ingestIn(s, lcActor(), "pre-activation", "A1", beforeActivation)
++	r, err := h.ingest(lateIn)
++	h.checkIngest(t, "I06 occurred before activated_at", lateIn, r, err, lcWant{outcome: claims.OutcomeRejected, reason: claims.ReasonOfferInactive, kind: "MATCH", offer: &active, qty: 1, explicit: &t0, mode: "EXACT", generation: gen})
++	vector("I06 reactivated", "A1", lcWant{outcome: claims.OutcomeAccepted, kind: "MATCH", offer: &active, qty: 1, explicit: &t0, line: 1})
++
++	// Board stats: every persisted reason present, counts equal the current generation.
++	board := h.board(t, s)
++	var accepted int64
++	if err := f.owner.QueryRow(h.ctx, `SELECT count(*) FROM claims.events WHERE session_id=$1 AND window_generation=$2 AND outcome='ACCEPTED'`, s, gen).Scan(&accepted); err != nil {
++		t.Fatal(err)
++	}
++	if board.Stats.Generation != gen || board.Stats.Accepted != accepted || len(board.Stats.Rejected) != 7 {
++		t.Fatalf("stats %+v (accepted %d)", board.Stats, accepted)
++	}
++	for _, reason := range []claims.Reason{claims.ReasonNoMatch, claims.ReasonUnknownKeyword, claims.ReasonOfferInactive, claims.ReasonInvalidQuantity,
++		claims.ReasonQuantityRequired, claims.ReasonQuantityOverMax, claims.ReasonBundleLimit} {
++		got, ok := board.Stats.Rejected[reason]
++		if want := int64(countRows(t, f.owner, `SELECT count(*) FROM claims.events WHERE session_id=$1 AND window_generation=$2 AND reason=$3`, s, gen, string(reason))); !ok || got != want {
++			t.Fatalf("stats %s=%d (present %t), want %d", reason, got, ok, want)
++		}
++	}
++
++	// I08 after close; and R7: another session's OPEN window never admits this session.
++	h.closeWindow(t, s)
++	n = eventCount()
++	if r, err := h.ingest(h.ingestIn(s, lcActor(), "closed", "A1", h.dbNow(t))); err != nil || r.Reason != claims.ReasonWindowClosed || r.EventID != "" || eventCount() != n {
++		t.Fatalf("I08 after close %+v %v", r, err)
++	}
++	// A duplicate of an ACCEPTED source is answered from storage even after the close
++	// (dedup precedes the window read, §4.3 steps 2-3).
++	if dup, err := h.ingest(sIn[3]); err != nil || !dup.Duplicate || dup.EventID != sOut[3].EventID {
++		t.Fatalf("duplicate after close %+v %v", dup, err)
++	}
++	s2 := h.draft(t, f.storeA1)
++	h.open(t, s2, claims.MatchExact)
++	if r, err := h.ingest(h.ingestIn(s, lcActor(), "other-open", "A1", h.dbNow(t))); err != nil || r.Reason != claims.ReasonWindowClosed || eventCount() != n {
++		t.Fatalf("R7 other session open %+v %v", r, err)
++	}
++	h.closeWindow(t, s2)
++
++	// S04 BUNDLE_LIMIT: 50 lines accepted, the 51st distinct offer is rejected; an
++	// existing line of the full bundle still updates.
++	sl := h.draft(t, f.storeA1)
++	wl := h.open(t, sl, claims.MatchExact)
++	skus := lcSKUs(t, f, f.tenantA, f.storeA1, "USD", 51)
++	mustExec(t, f.owner, `INSERT INTO live.offers(tenant_id,store_id,session_id,keyword,sku_id,max_quantity_per_claim,principal_id)
++		SELECT $1,$2,$3,'K'||lpad(i::text,4,'0'),sku,5,$4 FROM unnest($5::uuid[]) WITH ORDINALITY AS u(sku,i)`, f.tenantA, f.storeA1, sl, h.actor, skus)
++	offers := map[string]claims.Offer{}
++	for _, o := range h.board(t, sl).Offers {
++		offers[o.Keyword] = o
++	}
++	big := lcActor()
++	for i := 1; i <= 50; i++ {
++		kw := fmt.Sprintf("K%04d", i)
++		in := h.ingestIn(sl, big, "limit", kw, h.dbNow(t))
++		if r, err := h.ingest(in); err != nil || r.Outcome != claims.OutcomeAccepted || r.LineVersion != 1 || r.BundleVersion != int64(i) {
++			t.Fatalf("S04 line %d %+v %v", i, r, err)
++		}
++	}
++	o51 := offers["K0051"]
++	limitIn := h.ingestIn(sl, big, "", "K0051", h.dbNow(t))
++	r, err = h.ingest(limitIn)
++	h.checkIngest(t, "S04 51st", limitIn, r, err, lcWant{outcome: claims.OutcomeRejected, reason: claims.ReasonBundleLimit, kind: "MATCH", offer: &o51, qty: 1, explicit: &t0,
++		mode: "EXACT", generation: wl.Generation, bundleExpected: "limit-bundle-exists"})
++	o1 := offers["K0001"]
++	updIn := h.ingestIn(sl, big, "", "K0001+2", h.dbNow(t))
++	r, err = h.ingest(updIn)
++	h.checkIngest(t, "S04 update in full bundle", updIn, r, err, lcWant{outcome: claims.OutcomeAccepted, kind: "MATCH", offer: &o1, qty: 2, explicit: &f0, prev: 1, line: 2, mode: "EXACT", generation: wl.Generation})
++	if n := countRows(t, f.owner, `SELECT line_count FROM claims.bundles WHERE actor_key=$1`, big); n != 50 {
++		t.Fatalf("S04 line_count %d", n)
++	}
++	h.closeWindow(t, sl)
++
++	// Committed bundles always have >=1 line; line_count and version match the lines/events.
++	if n := countRows(t, f.owner, `SELECT count(*) FROM claims.bundles b WHERE b.session_id=ANY($1) AND (
++		b.line_count<>(SELECT count(*) FROM claims.lines l WHERE l.bundle_id=b.id) OR b.line_count<1
++		OR b.version<>(SELECT count(*) FROM claims.events e WHERE e.bundle_id=b.id AND e.outcome='ACCEPTED'))`, []string{s, sl}); n != 0 {
++		t.Fatalf("%d bundles violate the line/version bookkeeping", n)
++	}
++	lcSameDigest(t, "ingest touched a foreign schema", quiet, lcDigest(t, f, "inventory", "storefront", "checkout", "buyer", "social", "meta_inbox"))
++}
++
++// TestLiveClaimsKC07Concurrency is KC07 (§5: replay, absolute quantities, order, fences,
++// binding, global lock order) with real parallel transactions.
++func TestLiveClaimsKC07Concurrency(t *testing.T) {
++	h := lcSetup(t)
++	f := h.f
++	s := h.draft(t, f.storeA1)
++	h.open(t, s, claims.MatchExact)
++	a1 := h.offer(t, s, "A1", h.stock.skus[0].ID, 5)
++	b2 := h.offer(t, s, "B2", h.stock.skus[1].ID, 999)
++	var wg sync.WaitGroup
++
++	t.Run("duplicate-delivery-x20", func(t *testing.T) {
++		in := h.ingestIn(s, lcActor(), "dup-20", "A1+2", h.dbNow(t))
++		results, errs := make([]claims.IngestResult, 20), make([]error, 20)
++		start := make(chan struct{})
++		for i := range results {
++			wg.Add(1)
++			go func(i int) { defer wg.Done(); <-start; results[i], errs[i] = h.ingest(in) }(i)
++		}
++		close(start)
++		wg.Wait()
++		fresh := 0
++		for i, r := range results {
++			if errs[i] != nil {
++				t.Fatalf("delivery %d: %v", i, errs[i])
++			}
++			if !r.Duplicate {
++				fresh++
++			}
++			r.Duplicate = false
++			first := results[0]
++			first.Duplicate = false
++			if !reflect.DeepEqual(r, first) {
++				t.Fatalf("delivery %d result %+v differs from %+v", i, r, first)
++			}
++		}
++		if fresh != 1 || countRows(t, f.owner, `SELECT count(*) FROM claims.events WHERE source_event_id=$1`, in.SourceEventID) != 1 ||
++			countRows(t, f.owner, `SELECT version FROM claims.lines WHERE bundle_id=$1`, results[0].BundleID) != 1 {
++			t.Fatalf("duplicate delivery wrote %d fresh results", fresh)
++		}
++	})
++
++	t.Run("same-actor-rapid-set-quantity", func(t *testing.T) {
++		base := h.accepted(t, s, "", "rapid", "B2")
++		const n = 12
++		results, errs := make([]claims.ManualClaimResult, n), make([]error, n)
++		start := make(chan struct{})
++		for i := 0; i < n; i++ {
++			wg.Add(1)
++			go func(i int) {
++				defer wg.Done()
++				<-start
++				results[i], errs[i] = h.manual(h.token, f.storeA1, t04Key("lc-rapid"), s, claims.ManualClaimInput{BundleID: base.BundleID, Text: fmt.Sprintf("B2+%d", i+2)})
++			}(i)
++		}
++		close(start)
++		wg.Wait()
++		seen := map[int64]bool{}
++		for i := range results {
++			if errs[i] != nil || results[i].Outcome != claims.OutcomeAccepted || seen[results[i].LineVersion] {
++				t.Fatalf("rapid set %d: %+v %v", i, results[i], errs[i])
++			}
++			seen[results[i].LineVersion] = true
++		}
++		var qty, version int64
++		if err := f.owner.QueryRow(h.ctx, `SELECT quantity,version FROM claims.lines WHERE bundle_id=$1 AND offer_id=$2`, base.BundleID, b2.ID).Scan(&qty, &version); err != nil {
++			t.Fatal(err)
++		}
++		var lastQty, broken int64
++		if err := f.owner.QueryRow(h.ctx, `SELECT (SELECT quantity FROM claims.events WHERE bundle_id=$1 AND offer_id=$2 AND outcome='ACCEPTED' ORDER BY line_version DESC LIMIT 1),
++			(SELECT count(*) FROM claims.events e JOIN claims.events p ON p.bundle_id=e.bundle_id AND p.offer_id=e.offer_id AND p.outcome='ACCEPTED' AND p.line_version=e.line_version-1
++			 WHERE e.bundle_id=$1 AND e.offer_id=$2 AND e.outcome='ACCEPTED' AND e.previous_quantity IS DISTINCT FROM p.quantity)`, base.BundleID, b2.ID).Scan(&lastQty, &broken); err != nil {
++			t.Fatal(err)
++		}
++		if version != n+1 || qty != lastQty || broken != 0 || countRows(t, f.owner, `SELECT version FROM claims.bundles WHERE id=$1`, base.BundleID) != n+1 {
++			t.Fatalf("final line qty=%d v%d (last committed %d, broken chain %d)", qty, version, lastQty, broken)
++		}
++	})
++
++	t.Run("close-s1-open-s2-interleave", func(t *testing.T) {
++		other := h.draft(t, f.storeA1)
++		key := t04Key("lc-interleave")
++		lock, err := f.owner.Begin(h.ctx)
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer lock.Rollback(h.ctx)
++		if _, err = lock.Exec(h.ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "command|"+f.tenantA+"|"+f.storeA1+"|live.claim.manual|"+key); err != nil {
++			t.Fatal(err)
++		}
++		events := countRows(t, f.owner, `SELECT count(*) FROM claims.events WHERE session_id=$1`, s)
++		var got claims.ManualClaimResult
++		pid, done := h.bgMerchant(t, h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) (err error) {
++			got, err = claims.RecordManualClaim(h.ctx, tx, sc, h.labels, h.token, key, s, claims.ManualClaimInput{ActorLabel: "interleave", Text: "A1"})
++			return err
++		})
++		lpWaitLock(t, f, pid, true)
++		h.closeWindow(t, s)
++		h.open(t, other, claims.MatchExact)
++		_ = lock.Rollback(h.ctx)
++		if err := waitError(t, done); err != nil || got.Outcome != claims.OutcomeRejected || got.Reason != claims.ReasonWindowClosed {
++			t.Fatalf("interleaved manual claim %+v %v", got, err)
++		}
++		if countRows(t, f.owner, `SELECT count(*) FROM claims.events WHERE session_id=$1`, other)+countRows(t, f.owner, `SELECT count(*) FROM claims.bundles WHERE session_id=$1`, other) != 0 ||
++			countRows(t, f.owner, `SELECT count(*) FROM claims.events WHERE session_id=$1`, s) != events {
++			t.Fatal("interleaved claim wrote to a session")
++		}
++		h.closeWindow(t, other)
++		h.open(t, s, claims.MatchExact)
++	})
++
++	t.Run("deactivate-vs-ingest", func(t *testing.T) {
++		base := h.accepted(t, s, "", "fence", "B2")
++		current := func() claims.Offer {
++			for _, o := range h.board(t, s).Offers {
++				if o.ID == a1.ID {
++					return o
++				}
++			}
++			t.Fatal("offer A1 missing")
++			return claims.Offer{}
++		}
++		// An in-flight ingest holds A1 FOR SHARE; the deactivation waits, then later ingests see it inactive.
++		hold := h.holdMerchant(t, h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) error {
++			r, err := claims.RecordManualClaim(h.ctx, tx, sc, h.labels, h.token, t04Key("lc-fence"), s, claims.ManualClaimInput{BundleID: base.BundleID, Text: "A1"})
++			if err == nil && r.Outcome != claims.OutcomeAccepted {
++				err = fmt.Errorf("fenced claim %+v", r)
++			}
++			return err
++		})
++		o := current()
++		pid, done := h.bgMerchant(t, h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) error {
++			_, err := claims.UpdateOffer(h.ctx, tx, sc, h.token, t04Key("lc-deactivate"), s, o.ID, claims.OfferUpdate{ExpectedVersion: o.Version, MaxQuantityPerClaim: o.MaxQuantityPerClaim, Active: false})
++			return err
++		})
++		lpWaitLock(t, f, pid, false)
++		if err := hold.finish(t); err != nil {
++			t.Fatal(err)
++		}
++		if err := waitError(t, done); err != nil {
++			t.Fatalf("deactivation after in-flight ingest: %v", err)
++		}
++		if r := h.claim(t, s, claims.ManualClaimInput{BundleID: base.BundleID, Text: "A1+2"}); r.Reason != claims.ReasonOfferInactive {
++			t.Fatalf("ingest after deactivation %+v", r)
++		}
++		// Reverse: a held deactivation makes a concurrent ingest wait; the ingest then sees it inactive.
++		o = h.setOffer(t, s, current(), 5, true)
++		hold = h.holdMerchant(t, h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) error {
++			_, err := claims.UpdateOffer(h.ctx, tx, sc, h.token, t04Key("lc-deactivate"), s, o.ID, claims.OfferUpdate{ExpectedVersion: o.Version, MaxQuantityPerClaim: 5, Active: false})
++			return err
++		})
++		var got claims.ManualClaimResult
++		pid, done = h.bgMerchant(t, h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) (err error) {
++			got, err = claims.RecordManualClaim(h.ctx, tx, sc, h.labels, h.token, t04Key("lc-fence"), s, claims.ManualClaimInput{BundleID: base.BundleID, Text: "A1+3"})
++			return err
++		})
++		lpWaitLock(t, f, pid, false)
++		if err := hold.finish(t); err != nil {
++			t.Fatal(err)
++		}
++		if err := waitError(t, done); err != nil || got.Reason != claims.ReasonOfferInactive {
++			t.Fatalf("ingest waiting on deactivation %+v %v", got, err)
++		}
++		h.setOffer(t, s, current(), 5, true)
++	})
++
++	t.Run("owners-racing-to-redeem", func(t *testing.T) {
++		r := h.accepted(t, s, "", "race", "A1+2")
++		l := h.link(t, s, r.BundleID, 0, false)
++		owner1, owner2 := mustIssue(t, h.service, f.storeA1), mustIssue(t, h.service, f.storeA1)
++		hold := h.holdBuyer(t, owner1, func(ctx context.Context, tx pgx.Tx, sc buyer.Scope) error {
++			_, err := claims.RedeemLink(ctx, tx, sc, t04Key("lc-redeem"), l.Token, claims.RedeemInput{ExpectedBundleVersion: r.BundleVersion})
++			return err
++		})
++		loserKey := t04Key("lc-redeem")
++		pid, done := h.bgBuyer(t, owner2, func(ctx context.Context, tx pgx.Tx, sc buyer.Scope) error {
++			_, err := claims.RedeemLink(ctx, tx, sc, loserKey, l.Token, claims.RedeemInput{ExpectedBundleVersion: r.BundleVersion})
++			return err
++		})
++		lpWaitLock(t, f, pid, false)
++		if err := hold.finish(t); err != nil {
++			t.Fatal(err)
++		}
++		lcIs(t, waitError(t, done), command.ErrNotFound, "second owner after the first bound")
++		if lcOwner(t, f, r.BundleID) != owner1.Scope.OwnerID || h.cartOf(t, owner2).Version != 0 ||
++			countRows(t, f.owner, `SELECT count(*) FROM buyer.command_results WHERE owner_id=$1`, owner2.Scope.OwnerID) != 0 {
++			t.Fatal("losing owner wrote or the binding moved")
++		}
++		// Unsynchronized race on a fresh bundle: exactly one owner binds.
++		r2 := h.accepted(t, s, "", "race-2", "A1")
++		l2 := h.link(t, s, r2.BundleID, 0, false)
++		owners := []buyer.Capability{mustIssue(t, h.service, f.storeA1), mustIssue(t, h.service, f.storeA1)}
++		errs := make([]error, 2)
++		start := make(chan struct{})
++		for i := range owners {
++			wg.Add(1)
++			go func(i int) { defer wg.Done(); <-start; _, errs[i] = h.redeem(owners[i], t04Key("lc-redeem"), l2.Token, r2.BundleVersion) }(i)
++		}
++		close(start)
++		wg.Wait()
++		winner := -1
++		for i, err := range errs {
++			if err == nil {
++				winner = i
++			} else if !errors.Is(err, command.ErrNotFound) {
++				t.Fatalf("race error %v", err)
++			}
++		}
++		if winner < 0 || errs[1-winner] == nil || lcOwner(t, f, r2.BundleID) != owners[winner].Scope.OwnerID {
++			t.Fatalf("race outcome %v", errs)
++		}
++	})
++
++	t.Run("release-vs-redeem", func(t *testing.T) {
++		r := h.accepted(t, s, "", "release", "A1+2")
++		l := h.link(t, s, r.BundleID, 0, false)
++		owner1, owner2 := mustIssue(t, h.service, f.storeA1), mustIssue(t, h.service, f.storeA1)
++		if _, err := h.redeem(owner1, t04Key("lc-redeem"), l.Token, r.BundleVersion); err != nil {
++			t.Fatal(err)
++		}
++		// A held release+rotation makes an old-token redeem wait; afterwards the old token is gone.
++		var rotated claims.IssuedLink
++		hold := h.holdMerchant(t, h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) (err error) {
++			rotated, err = claims.IssueLink(h.ctx, tx, sc, h.token, t04Key("lc-link"), s, r.BundleID, claims.LinkInput{ExpectedGeneration: 1, ReleaseBinding: true})
++			return err
++		})
++		pid, done := h.bgBuyer(t, owner1, func(ctx context.Context, tx pgx.Tx, sc buyer.Scope) error {
++			_, err := claims.RedeemLink(ctx, tx, sc, t04Key("lc-redeem"), l.Token, claims.RedeemInput{ExpectedBundleVersion: r.BundleVersion})
++			return err
++		})
++		lpWaitLock(t, f, pid, false)
++		if err := hold.finish(t); err != nil || !rotated.Released {
++			t.Fatalf("release: %+v %v", rotated.Released, err)
++		}
++		lcIs(t, waitError(t, done), command.ErrNotFound, "old-token redeem after release")
++		if lcOwner(t, f, r.BundleID) != "" {
++			t.Fatal("redeem re-bound a released bundle through the old token")
++		}
++		// A held redeem by the new owner makes the next release wait; the release then clears that binding.
++		hold = h.holdBuyer(t, owner2, func(ctx context.Context, tx pgx.Tx, sc buyer.Scope) error {
++			_, err := claims.RedeemLink(ctx, tx, sc, t04Key("lc-redeem"), rotated.Token, claims.RedeemInput{ExpectedBundleVersion: r.BundleVersion})
++			return err
++		})
++		var again claims.IssuedLink
++		pid, done = h.bgMerchant(t, h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) (err error) {
++			again, err = claims.IssueLink(h.ctx, tx, sc, h.token, t04Key("lc-link"), s, r.BundleID, claims.LinkInput{ExpectedGeneration: 2, ReleaseBinding: true})
++			return err
++		})
++		lpWaitLock(t, f, pid, false)
++		if err := hold.finish(t); err != nil {
++			t.Fatal(err)
++		}
++		if err := waitError(t, done); err != nil || !again.Released || lcOwner(t, f, r.BundleID) != "" {
++			t.Fatalf("release after held redeem: released=%t err=%v", again.Released, err)
++		}
++		if items := lcItems(h.cartOf(t, owner2).Items); items[h.stock.skus[0].ID] != 2 {
++			t.Fatalf("released owner's cart must be untouched: %v", items)
++		}
++	})
++
++	t.Run("cart-lock-ordering", func(t *testing.T) {
++		r := h.accepted(t, s, "", "cart-order", "B2+2")
++		l := h.link(t, s, r.BundleID, 0, false)
++		owner := mustIssue(t, h.service, f.storeA1)
++		hold := h.holdBuyer(t, owner, func(ctx context.Context, tx pgx.Tx, sc buyer.Scope) error { return storefront.LockCartOwner(ctx, tx, sc) })
++		pid, done := h.bgBuyer(t, owner, func(ctx context.Context, tx pgx.Tx, sc buyer.Scope) error {
++			_, err := claims.RedeemLink(ctx, tx, sc, t04Key("lc-redeem"), l.Token, claims.RedeemInput{ExpectedBundleVersion: r.BundleVersion})
++			return err
++		})
++		lpWaitLock(t, f, pid, true)
++		if err := hold.finish(t); err != nil {
++			t.Fatal(err)
++		}
++		if err := waitError(t, done); err != nil || lcItems(h.cartOf(t, owner).Items)[h.stock.skus[1].ID] != 2 {
++			t.Fatalf("redeem after the cart-owner lock: %v", err)
++		}
++		// Two bundles of one owner redeemed concurrently with the owner's own PUT cart: no
++		// deadlock, only success or CAS conflict.
++		x, y := h.accepted(t, s, "", "stress-x", "A1"), h.accepted(t, s, "", "stress-y", "B2")
++		lx, ly := h.link(t, s, x.BundleID, 0, false), h.link(t, s, y.BundleID, 0, false)
++		for round := 0; round < 6; round++ {
++			rx := h.accepted(t, s, x.BundleID, "", fmt.Sprintf("A1+%d", round%4+1))
++			ry := h.accepted(t, s, y.BundleID, "", fmt.Sprintf("B2+%d", round+1))
++			cart := h.cartOf(t, owner)
++			errs := make([]error, 3)
++			start := make(chan struct{})
++			ops := []func() error{
++				func() error { _, err := h.redeem(owner, t04Key("lc-redeem"), lx.Token, rx.BundleVersion); return err },
++				func() error { _, err := h.redeem(owner, t04Key("lc-redeem"), ly.Token, ry.BundleVersion); return err },
++				func() error {
++					_, err := h.putCart(owner, t04Key("lc-cart"), storefront.CartInput{ExpectedVersion: cart.Version, Items: []storefront.Item{{SKUID: h.stock.skus[0].ID, Quantity: int64(round + 1)}}})
++					return err
++				},
++			}
++			for i := range ops {
++				wg.Add(1)
++				go func(i int) { defer wg.Done(); <-start; errs[i] = ops[i]() }(i)
++			}
++			close(start)
++			wg.Wait()
++			for i, err := range errs {
++				if err != nil && !errors.Is(err, command.ErrConflict) {
++					t.Fatalf("round %d op %d: %v (sqlstate %s)", round, i, err, sqlState(err))
++				}
++			}
++		}
++	})
++
++	t.Run("mixed-workload-zero-deadlocks", func(t *testing.T) {
++		p := h.accepted(t, s, "", "mixed-p", "B2")
++		lp := h.link(t, s, p.BundleID, 0, false)
++		q := h.accepted(t, s, "", "mixed-q", "A1")
++		h.link(t, s, q.BundleID, 0, false)
++		owner := mustIssue(t, h.service, f.storeA1)
++		if _, err := h.redeem(owner, t04Key("lc-redeem"), lp.Token, p.BundleVersion); err != nil {
++			t.Fatal(err)
++		}
++		var mu sync.Mutex
++		var deadlocks, timeouts int
++		var unexpected []string
++		record := func(worker string, err error) {
++			mu.Lock()
++			defer mu.Unlock()
++			switch {
++			case err == nil, errors.Is(err, command.ErrConflict), errors.Is(err, command.ErrNotFound), errors.Is(err, command.ErrInvalid):
++			case sqlState(err) == "40P01":
++				deadlocks++
++			case sqlState(err) == "55P03" || sqlState(err) == "57014":
++				timeouts++
++			default:
++				unexpected = append(unexpected, worker+": "+err.Error())
++			}
++		}
++		const rounds = 6
++		workers := map[string]func(int) error{
++			"ingest": func(i int) error {
++				_, err := h.manual(h.token, f.storeA1, t04Key("lc-mixed"), s, claims.ManualClaimInput{BundleID: p.BundleID, Text: fmt.Sprintf("B2+%d", i+1)})
++				return err
++			},
++			"redeem": func(i int) error {
++				pv, err := h.preview(owner, lp.Token)
++				if err != nil {
++					return err
++				}
++				_, err = h.redeem(owner, t04Key("lc-mixed"), lp.Token, pv.BundleVersion)
++				return err
++			},
++			"issue": func(i int) error {
++				page, err := h.bundles(h.token, f.storeA1, s, pageAll)
++				if err != nil {
++					return err
++				}
++				for _, b := range page.Items {
++					if b.ID == q.BundleID {
++						_, err = h.issue(h.token, f.storeA1, t04Key("lc-mixed"), s, q.BundleID, claims.LinkInput{ExpectedGeneration: b.Link.Generation})
++					}
++				}
++				return err
++			},
++			"offer-update": func(i int) error {
++				for _, o := range h.board(t, s).Offers {
++					if o.ID == b2.ID {
++						_, err := h.updateOffer(h.token, f.storeA1, t04Key("lc-mixed"), s, o.ID, claims.OfferUpdate{ExpectedVersion: o.Version, MaxQuantityPerClaim: int64(900 + i), Active: true})
++						return err
++					}
++				}
++				return nil
++			},
++			"window": func(i int) error {
++				w := h.board(t, s).Window
++				state := claims.WindowClosed
++				if w.State == claims.WindowClosed {
++					state = claims.WindowOpen
++				}
++				_, err := h.setWindow(h.token, f.storeA1, s, claims.WindowInput{ExpectedVersion: w.Version, State: state, MatchMode: w.MatchMode})
++				return err
++			},
++			"update-draft": func(i int) error {
++				return h.do(h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) error {
++					d, err := live.GetDraft(h.ctx, tx, sc, h.token, s)
++					if err != nil {
++						return err
++					}
++					_, err = live.UpdateDraft(h.ctx, tx, sc, h.token, t04Key("lc-mixed"), s, d.Version, live.DraftInput{Title: fmt.Sprintf("mixed %d", i), AspectRatio: "9:16"})
++					return err
++				})
++			},
++			"put-cart": func(i int) error {
++				c := h.cartOf(t, owner)
++				_, err := h.putCart(owner, t04Key("lc-mixed"), storefront.CartInput{ExpectedVersion: c.Version, Items: []storefront.Item{{SKUID: h.stock.skus[0].ID, Quantity: int64(i + 1)}, {SKUID: h.stock.skus[1].ID, Quantity: 1}}})
++				return err
++			},
++			"quote": func(i int) error {
++				c := h.cartOf(t, owner)
++				_, err := cqBuyer(h.a.runtime, owner, func(ctx context.Context, tx pgx.Tx, sc buyer.Scope) (storefront.Quote, error) {
++					return storefront.CreateQuote(ctx, tx, sc, t04Key("lc-mixed"), storefront.QuoteInput{CartVersion: c.Version, MarketID: h.market.ID, Country: "TW", Method: "cvs_711"})
++				})
++				return err
++			},
++		}
++		start := make(chan struct{})
++		for name, fn := range workers {
++			wg.Add(1)
++			go func(name string, fn func(int) error) {
++				defer wg.Done()
++				<-start
++				for i := 0; i < rounds; i++ {
++					record(name, fn(i))
++				}
++			}(name, fn)
++		}
++		close(start)
++		wg.Wait()
++		if timeouts > 0 {
++			t.Logf("mixed workload: %d lock/statement timeouts (not a 40P01)", timeouts)
++		}
++		if deadlocks != 0 || len(unexpected) != 0 {
++			t.Fatalf("mixed workload deadlocks=%d unexpected=%v", deadlocks, unexpected)
++		}
++		h.open(t, s, claims.MatchExact)
++	})
++}
++
++var pageAll = struct{ Limit int }{100}.toRequest()
++
++// lcServerLog locates the labelled PostgreSQL fixture container that serves this test
++// database (pgfocus / test-local.sh start it with a livecommerce.fixture label) and
++// returns a reader for its server log since now. PostgreSQL logs every ERROR with its
++// DETAIL, so a label that reached a constraint violation would appear here (P2(b)).
++func lcServerLog(t *testing.T, f *testFixture) func() string {
++	t.Helper()
++	u, err := url.Parse(f.databaseURL)
++	if err != nil {
++		t.Fatal(err)
++	}
++	out, err := exec.Command("docker", "ps", "--filter", "label=livecommerce.fixture", "--format", "{{.Names}}\t{{.Ports}}").Output()
++	if err != nil {
++		t.Fatalf("NOT_RUN: PostgreSQL server log capture needs docker: %v", err)
++	}
++	name := ""
++	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
++		parts := strings.SplitN(line, "\t", 2)
++		if len(parts) == 2 && strings.Contains(parts[1], "127.0.0.1:"+u.Port()+"->5432/tcp") {
++			name = parts[0]
++		}
++	}
++	if name == "" {
++		t.Fatalf("NOT_RUN: no labelled fixture container publishes port %s", u.Port())
++	}
++	since := time.Now().Add(-time.Second).UTC().Format(time.RFC3339Nano)
++	return func() string {
++		t.Helper()
++		logs, err := exec.Command("docker", "logs", "--since", since, name).CombinedOutput()
++		if err != nil {
++			t.Fatalf("read PostgreSQL server log: %v", err)
++		}
++		return string(logs)
++	}
++}
++
++// lcFind returns every base table (of schemas, or of all non-system schemas when none
++// are given) with a row whose text form contains needle. bytea renders as \x-hex in the
++// row text, so a hex needle also finds a stored hash. where optionally restricts rows of
++// a table (alias t) to this test's own owners/principals.
++func lcFind(t *testing.T, f *testFixture, needle string, where map[string]string, schemas ...string) []string {
++	t.Helper()
++	query := `SELECT format('%I.%I',table_schema,table_name) FROM information_schema.tables WHERE table_type='BASE TABLE'
++		AND table_schema NOT IN ('pg_catalog','information_schema') AND table_schema NOT LIKE 'pg\_%'`
++	args := []any{}
++	if len(schemas) > 0 {
++		query += ` AND table_schema=ANY($1)`
++		args = append(args, schemas)
++	}
++	var hits []string
++	for _, table := range lcStrings(t, f.owner, query+` ORDER BY 1`, args...) {
++		predicate := "true"
++		if w, ok := where[table]; ok {
++			predicate = w
++		}
++		var found bool
++		if err := f.owner.QueryRow(context.Background(), `SELECT EXISTS(SELECT 1 FROM `+table+` t WHERE strpos(t::text,$1)>0 AND (`+predicate+`))`, needle).Scan(&found); err != nil {
++			t.Fatalf("scan %s: %v", table, err)
++		}
++		if found {
++			hits = append(hits, table)
++		}
++	}
++	return hits
++}
++
++// TestLiveClaimsKC08ManualPrivacy is KC08 (§4.2 RecordManualClaim, §8 privacy).
++func TestLiveClaimsKC08ManualPrivacy(t *testing.T) {
++	h := lcSetup(t)
++	f := h.f
++	logs := lcServerLog(t, f)
++	s := h.draft(t, f.storeA1)
++	h.open(t, s, claims.MatchExact)
++	h.offer(t, s, "A1", h.stock.skus[0].ID, 5)
++	h.offer(t, s, "B2", h.stock.skus[1].ID, 999)
++	tag := t04Tag()
++	amy, bob := "amy-"+tag, "bob-"+tag
++
++	key := t04Key("lc-manual")
++	first, err := h.manual(h.token, f.storeA1, key, s, claims.ManualClaimInput{ActorLabel: "@Amy-" + strings.ToUpper(tag) + " ", Text: "A1+2"})
++	if err != nil || first.Outcome != claims.OutcomeAccepted || first.Quantity != 2 || first.Keyword != "A1" || first.PreviousQuantity != 0 || first.BundleVersion != 1 || first.LineVersion != 1 {
++		t.Fatalf("first manual claim %+v %v", first, err)
++	}
++	h.accepted(t, s, first.BundleID, "", "A1+4")
++	h.accepted(t, s, first.BundleID, "", "B2")
++	// Replay returns the original receipt after later commands; normalized label and an
++	// equivalent parse replay; any other canonical request under the key is 409 (I02).
++	for label, in := range map[string]claims.ManualClaimInput{
++		"identical": {ActorLabel: "@Amy-" + strings.ToUpper(tag) + " ", Text: "A1+2"}, "normalized label": {ActorLabel: amy, Text: "A1+2"},
++		"equivalent parse": {ActorLabel: amy, Text: "ａ１＋２"},
++	} {
++		if replay, err := h.manual(h.token, f.storeA1, key, s, in); err != nil || replay != first {
++			t.Fatalf("replay (%s) %+v %v", label, replay, err)
++		}
++	}
++	for label, in := range map[string]claims.ManualClaimInput{
++		"other label": {ActorLabel: bob, Text: "A1+2"}, "other quantity": {ActorLabel: amy, Text: "A1+3"}, "other keyword": {ActorLabel: amy, Text: "B2+2"},
++		"bundle instead of label": {BundleID: first.BundleID, Text: "A1+2"},
++	} {
++		lcIs(t, lcErr(h.manual(h.token, f.storeA1, key, s, in)), command.ErrConflict, "same key, "+label)
++	}
++	lcIs(t, lcErr(h.manual(h.token, f.storeA1, t04Key("lc-manual"), s, claims.ManualClaimInput{ActorLabel: "@" + amy, Text: "A1"})), command.ErrConflict, "new actor with a used label")
++	second := h.accepted(t, s, "", bob, "A1")
++	if second.BundleID == first.BundleID {
++		t.Fatal("two labels must be two bundles")
++	}
++	// A rejected first comment of a new actor leaves no bundle and no label anywhere.
++	cat := "cat-" + tag
++	for _, text := range []string{"不要A1", "Z9", "A1+9"} {
++		r := h.claim(t, s, claims.ManualClaimInput{ActorLabel: cat, Text: text})
++		if r.Outcome != claims.OutcomeRejected || r.BundleID != "" {
++			t.Fatalf("rejected first comment %q %+v", text, r)
++		}
++	}
++	if hits := lcFind(t, f, cat, nil); len(hits) != 0 {
++		t.Fatalf("label of a rejected first comment stored in %v", hits)
++	}
++	if r := h.accepted(t, s, "", cat, "A1"); r.BundleID == "" {
++		t.Fatal("label must remain free after rejected comments")
++	}
++	// Input validation (§4.2, §4.5).
++	otherSession := h.draft(t, f.storeA1)
++	for label, tc := range map[string]struct {
++		in   claims.ManualClaimInput
++		want error
++	}{
++		"both":          {claims.ManualClaimInput{BundleID: first.BundleID, ActorLabel: "x", Text: "A1"}, command.ErrInvalid},
++		"neither":       {claims.ManualClaimInput{Text: "A1"}, command.ErrInvalid},
++		"empty text":    {claims.ManualClaimInput{BundleID: first.BundleID}, command.ErrInvalid},
++		"257 bytes":     {claims.ManualClaimInput{BundleID: first.BundleID, Text: strings.Repeat("A", 257)}, command.ErrInvalid},
++		"control":       {claims.ManualClaimInput{BundleID: first.BundleID, Text: "A1\n"}, command.ErrInvalid},
++		"invalid utf8":  {claims.ManualClaimInput{BundleID: first.BundleID, Text: "A1\xff"}, command.ErrInvalid},
++		"bad bundle id": {claims.ManualClaimInput{BundleID: "bundle", Text: "A1"}, command.ErrInvalid},
++		"bad label":     {claims.ManualClaimInput{ActorLabel: "@", Text: "A1"}, command.ErrInvalid},
++		"long label":    {claims.ManualClaimInput{ActorLabel: strings.Repeat("l", 61), Text: "A1"}, command.ErrInvalid},
++		"unknown":       {claims.ManualClaimInput{BundleID: randomUUID(), Text: "A1"}, command.ErrNotFound},
++	} {
++		lcIs(t, lcErr(h.manual(h.token, f.storeA1, t04Key("lc-manual"), s, tc.in)), tc.want, "manual "+label)
++	}
++	lcIs(t, lcErr(h.manual(h.token, f.storeA1, t04Key("lc-manual"), otherSession, claims.ManualClaimInput{BundleID: first.BundleID, Text: "A1"})), command.ErrNotFound, "bundle of another session")
++	_, readerToken := lcPrincipal(t, f, f.tenantA, []string{f.storeA1}, "store:read", "live:read")
++	lcIs(t, lcErr(h.manual(readerToken, f.storeA1, t04Key("lc-manual"), s, claims.ManualClaimInput{BundleID: first.BundleID, Text: "A1"})), platform.ErrForbidden, "manual without live:manage")
++
++	// Sentinel texts: never persisted (R5), in any claims/live/ops/buyer/storefront row.
++	keywordShaped := "ZQ" + strings.ToUpper(tag[:10])
++	texts := []string{"0912345678", "0912345678+0", "A1是不是红色", keywordShaped, keywordShaped + "+7"}
++	for _, text := range texts {
++		h.claim(t, s, claims.ManualClaimInput{BundleID: first.BundleID, Text: text})
++	}
++	own := map[string]string{
++		"ops.command_results": "t.principal_id='" + h.actor + "'", "ops.audit_events": "t.principal_id='" + h.actor + "'",
++	}
++	for _, needle := range []string{"0912345678", "A1是不是红色", keywordShaped, lcSHA("0912345678"), lcSHA("A1是不是红色"), lcSHA(keywordShaped)} {
++		if hits := lcFind(t, f, needle, own, "claims", "live", "ops"); len(hits) != 0 {
++			t.Fatalf("comment text sentinel %q persisted in %v", needle, hits)
++		}
++	}
++	for _, needle := range []string{keywordShaped, lcSHA(keywordShaped), lcSHA("0912345678")} {
++		if hits := lcFind(t, f, needle, nil); len(hits) != 0 {
++			t.Fatalf("unique text sentinel %q persisted in %v", needle, hits)
++		}
++	}
++	// Label: only claims.bundles.label holds it; its unkeyed SHA-256 is nowhere.
++	for _, label := range []string{amy, bob} {
++		hits := lcFind(t, f, label, nil)
++		if len(hits) != 1 || hits[0] != "claims.bundles" || countRows(t, f.owner, `SELECT count(*) FROM claims.bundles WHERE label=$1`, label) != 1 ||
++			countRows(t, f.owner, `SELECT count(*) FROM claims.bundles b WHERE strpos(b::text,$1)>0`, label) != 1 {
++			t.Fatalf("label %q found in %v", label, hits)
++		}
++		for _, digest := range []string{lcSHA(label), lcSHA("@" + label)} {
++			if hits := lcFind(t, f, digest, nil); len(hits) != 0 {
++				t.Fatalf("unkeyed label hash found in %v", hits)
++			}
++		}
++	}
++	server := logs()
++	for _, needle := range append(texts, amy, bob, cat, strings.ToUpper(tag)) {
++		if strings.Contains(server, needle) {
++			t.Fatalf("PostgreSQL server log contains sentinel %q", needle)
++		}
++	}
++}
++
++// TestLiveClaimsP2bLabelPrivacy closes §0.1 P2(b): labels are validated in Go before SQL,
++// duplicate labels map to ErrConflict without echo, and no label ever reaches the
++// PostgreSQL server log through a constraint-violation DETAIL.
++func TestLiveClaimsP2bLabelPrivacy(t *testing.T) {
++	h := lcSetup(t)
++	f := h.f
++	logs := lcServerLog(t, f)
++	s := h.draft(t, f.storeA1)
++	h.open(t, s, claims.MatchExact)
++	h.offer(t, s, "A1", h.stock.skus[0].ID, 5)
++	sentinel := "p2b-" + t04Tag()
++	h.accepted(t, s, "", sentinel, "A1")
++	for _, label := range []string{sentinel, "@" + sentinel, "  " + strings.ToUpper(sentinel) + " ", "＠" + sentinel} {
++		_, err := h.manual(h.token, f.storeA1, t04Key("lc-manual"), s, claims.ManualClaimInput{ActorLabel: label, Text: "A1"})
++		lcIs(t, err, command.ErrConflict, "duplicate label")
++		lcNotPG(t, err, "duplicate label")
++		if strings.Contains(strings.ToLower(err.Error()), sentinel) {
++			t.Fatalf("duplicate-label error echoes the label: %v", err)
++		}
++	}
++	for _, label := range []string{sentinel + "x\x07", sentinel + "y​", strings.Repeat("z", 61) + sentinel, sentinel + "\xff", " @ "} {
++		_, err := h.manual(h.token, f.storeA1, t04Key("lc-manual"), s, claims.ManualClaimInput{ActorLabel: label, Text: "A1"})
++		lcIs(t, err, command.ErrInvalid, fmt.Sprintf("invalid label %q", label))
++		lcNotPG(t, err, "invalid label")
++	}
++	// Direct Ingest with a non-canonical label for a new bundle: rejected in Go or stored
++	// in canonical form, never a PostgreSQL constraint error.
++	for i, label := range []string{" " + sentinel + "-raw ", sentinel + "-ctl\x07", "@@" + sentinel, strings.Repeat("w", 70) + sentinel} {
++		r, err := h.ingest(h.ingestIn(s, lcActor(), label, "A1", h.dbNow(t)))
++		lcNotPG(t, err, fmt.Sprintf("ingest label %d", i))
++		if err != nil && !errors.Is(err, command.ErrInvalid) {
++			t.Fatalf("ingest label %q: %v", label, err)
++		}
++		if err == nil && r.Outcome == claims.OutcomeAccepted {
++			var stored string
++			if e := f.owner.QueryRow(h.ctx, `SELECT label FROM claims.bundles WHERE id=$1`, r.BundleID).Scan(&stored); e != nil {
++				t.Fatal(e)
++			}
++			if normalized, ok := grammar.NormalizeLabel(stored); !ok || normalized != stored {
++				t.Fatalf("ingest stored a non-canonical label %q", stored)
++			}
++		}
++	}
++	// Concurrent new actors with one label: one wins, the rest ErrConflict (no raw 23505).
++	racer := "p2b-race-" + t04Tag()
++	errs := make([]error, 4)
++	start := make(chan struct{})
++	var wg sync.WaitGroup
++	for i := range errs {
++		wg.Add(1)
++		go func(i int) {
++			defer wg.Done()
++			<-start
++			_, errs[i] = h.manual(h.token, f.storeA1, t04Key("lc-race"), s, claims.ManualClaimInput{ActorLabel: racer, Text: "A1"})
++		}(i)
++	}
++	close(start)
++	wg.Wait()
++	for _, err := range errs {
++		lcNotPG(t, err, "concurrent label")
++	}
++	if ok, conflicts := lcOutcomes(t, errs); ok != 1 || conflicts != 3 {
++		t.Fatalf("concurrent label winners=%d conflicts=%d", ok, conflicts)
++	}
++	if server := logs(); strings.Contains(server, sentinel) || strings.Contains(server, racer) || strings.Contains(strings.ToLower(server), strings.ToLower(sentinel)) {
++		t.Fatal("a manual label reached the PostgreSQL server log")
++	}
++}
++
++// TestLiveClaimsP2cDuplicateReconstructible closes §0.1 P2(c): a redelivered source
++// returns exactly the stored result (including the bundle version it produced, which
++// cannot be re-derived after later commands) with Duplicate=true and writes nothing.
++func TestLiveClaimsP2cDuplicateReconstructible(t *testing.T) {
++	h := lcSetup(t)
++	f := h.f
++	s := h.draft(t, f.storeA1)
++	h.open(t, s, claims.MatchExact)
++	h.offer(t, s, "A1", h.stock.skus[0].ID, 9)
++	h.offer(t, s, "B2", h.stock.skus[1].ID, 9)
++	actor := lcActor()
++	var inputs []claims.IngestInput
++	var outputs []claims.IngestResult
++	for _, text := range []string{"A1", "A1+3", "B2+2", "A1+5", "A1+50", "Z9", "不要"} {
++		in := h.ingestIn(s, actor, "p2c", text, h.dbNow(t))
++		r, err := h.ingest(in)
++		if err != nil {
++			t.Fatal(err)
++		}
++		inputs, outputs = append(inputs, in), append(outputs, r)
++	}
++	h.accepted(t, s, outputs[0].BundleID, "", "B2+7") // later commands move every version
++	snapshot := lcDigest(t, f, "claims")
++	for i, in := range inputs {
++		dup, err := h.ingest(in)
++		want := outputs[i]
++		want.Duplicate = true
++		if err != nil || !reflect.DeepEqual(dup, want) {
++			t.Fatalf("redelivery %d (%s): %+v %v, want %+v", i, in.Text, dup, err, want)
++		}
++	}
++	if outputs[1].BundleVersion != 2 || outputs[3].BundleVersion != 4 || outputs[3].PreviousQuantity != 3 {
++		t.Fatalf("fixture versions %+v", outputs)
++	}
++	lcSameDigest(t, "duplicate ingest wrote", snapshot, lcDigest(t, f, "claims"))
++}
++
++// TestLiveClaimsP2dLabelNormalization closes §0.1 P2(d) end to end: "@" is stripped
++// before the final trim, the result is idempotent, and the stored label is canonical.
++func TestLiveClaimsP2dLabelNormalization(t *testing.T) {
++	for raw, want := range map[string]string{"@ Amy": "amy", " @Amy ": "amy", "@　Amy　": "amy", "@ \tAmy  Chen": "amy chen"} {
++		got, ok := grammar.NormalizeLabel(raw)
++		if !ok || got != want {
++			t.Fatalf("NormalizeLabel(%q)=%q,%t want %q", raw, got, ok, want)
++		}
++		if again, ok := grammar.NormalizeLabel(got); !ok || again != got {
++			t.Fatalf("NormalizeLabel not idempotent on %q", got)
++		}
++	}
++	h := lcSetup(t)
++	f := h.f
++	s := h.draft(t, f.storeA1)
++	h.open(t, s, claims.MatchExact)
++	h.offer(t, s, "A1", h.stock.skus[0].ID, 5)
++	tag := t04Tag()
++	key := t04Key("lc-manual")
++	first, err := h.manual(h.token, f.storeA1, key, s, claims.ManualClaimInput{ActorLabel: "@ Amy " + strings.ToUpper(tag), Text: "A1"})
++	if err != nil || first.Outcome != claims.OutcomeAccepted {
++		t.Fatalf("label with '@ ' prefix: %+v %v", first, err)
++	}
++	var stored string
++	if err := f.owner.QueryRow(h.ctx, `SELECT label FROM claims.bundles WHERE id=$1`, first.BundleID).Scan(&stored); err != nil || stored != "amy "+tag {
++		t.Fatalf("stored label %q %v", stored, err)
++	}
++	if replay, err := h.manual(h.token, f.storeA1, key, s, claims.ManualClaimInput{ActorLabel: stored, Text: "A1"}); err != nil || replay != first {
++		t.Fatalf("canonical label replays the same receipt: %+v %v", replay, err)
++	}
++	lcIs(t, lcErr(h.manual(h.token, f.storeA1, t04Key("lc-manual"), s, claims.ManualClaimInput{ActorLabel: "  @AMY  " + tag + " ", Text: "A1"})), command.ErrConflict, "same canonical label, new actor")
++	for _, raw := range []string{"@@" + tag, "@ @" + tag, "＠＠" + tag} {
++		r, err := h.manual(h.token, f.storeA1, t04Key("lc-manual"), s, claims.ManualClaimInput{ActorLabel: raw, Text: "A1"})
++		lcNotPG(t, err, raw)
++		if err != nil && !errors.Is(err, command.ErrInvalid) && !errors.Is(err, command.ErrConflict) {
++			t.Fatalf("label %q: %v", raw, err)
++		}
++		if err == nil {
++			if e := f.owner.QueryRow(h.ctx, `SELECT label FROM claims.bundles WHERE id=$1`, r.BundleID).Scan(&stored); e != nil {
++				t.Fatal(e)
++			}
++			if again, ok := grammar.NormalizeLabel(stored); !ok || again != stored {
++				t.Fatalf("stored label %q is not a fixed point", stored)
++			}
++		}
++	}
++}
++
++// TestLiveClaimsP2eModeTransitions closes §0.1 P2(e): match_mode changes only while
++// CLOSED; a transition that also changes the mode is ErrConflict and changes nothing.
++func TestLiveClaimsP2eModeTransitions(t *testing.T) {
++	h := lcSetup(t)
++	f := h.f
++	s := h.draft(t, f.storeA1)
++	h.offer(t, s, "A1", h.stock.skus[0].ID, 5)
++	w := h.mustWindow(t, s, 0, claims.WindowClosed, claims.MatchExact)
++	unchanged := func(label string) {
++		t.Helper()
++		lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, s, claims.WindowInput{ExpectedVersion: w.Version, State: labelState(label), MatchMode: labelMode(label)})), command.ErrConflict, label)
++		if got := h.board(t, s).Window; !reflect.DeepEqual(got, w) {
++			t.Fatalf("%s changed the window: %+v -> %+v", label, w, got)
++		}
++	}
++	unchanged("OPEN/KEYWORD_QTY_ONLY from CLOSED/EXACT")
++	w = h.mustWindow(t, s, w.Version, claims.WindowOpen, claims.MatchExact)
++	unchanged("CLOSED/KEYWORD_QTY_ONLY from OPEN/EXACT")
++	unchanged("OPEN/KEYWORD_QTY_ONLY from OPEN/EXACT")
++	w = h.mustWindow(t, s, w.Version, claims.WindowClosed, claims.MatchExact)
++	w = h.mustWindow(t, s, w.Version, claims.WindowClosed, claims.MatchKeywordQtyOnly)
++	unchanged("OPEN/EXACT from CLOSED/KEYWORD_QTY_ONLY")
++	w = h.mustWindow(t, s, w.Version, claims.WindowOpen, claims.MatchKeywordQtyOnly)
++	if w.Generation != 2 || w.MatchMode != claims.MatchKeywordQtyOnly {
++		t.Fatalf("reopened in the new mode %+v", w)
++	}
++	if r := h.claim(t, s, claims.ManualClaimInput{ActorLabel: "p2e", Text: "A1"}); r.Reason != claims.ReasonQuantityRequired {
++		t.Fatalf("OPEN window mode not applied: %+v", r)
++	}
++	unchanged("CLOSED/EXACT from OPEN/KEYWORD_QTY_ONLY")
++}
++
++func labelState(label string) string { return strings.SplitN(label, "/", 2)[0] }
++
++func labelMode(label string) claims.MatchMode {
++	return claims.MatchMode(strings.SplitN(strings.SplitN(label, "/", 2)[1], " ", 2)[0])
++}
+diff --git a/tests/foundation/live_claims_schema_test.go b/tests/foundation/live_claims_schema_test.go
+new file mode 100644
+index 0000000..5e6b9ae
+--- /dev/null
++++ b/tests/foundation/live_claims_schema_test.go
+@@ -0,0 +1,1258 @@
++// T10 claims schema and isolation gates (independent test_worker; contract
++// contracts/live-keyword-claims-v1.md §3, §3.1-§3.3, §9 KC03/KC12, §0.1 P2(a)/(g)).
++//
++// Owns: KC03 (migration 0060 on a fresh and on a populated pre-0060 database, FORCE RLS,
++// the §3.2 privilege matrix compared for equality, definer ownership/config/ACLs, every
++// CHECK/FK in both directions, foreign-role denial, "no release without rotation" and
++// the pool validator), KC12 (tenant/store isolation of buyer definers, merchant RLS,
++// issue_link authority, no 42P17), P2(a) (OR-ed permissive policies cannot mix buyer and
++// merchant contexts) and P2(g) (link TTL enforced by the database).
++//
++// Non-goals: no claims business flow beyond what the probes need (those are KC04-KC11),
++// no HTTP, and no reading of internal/claims bodies. Probes that bypass Go run as the
++// superuser owner, sometimes after SET LOCAL ROLE commerce_claims_writer or a role under
++// test, always inside transactions that roll back, so no synthetic row survives.
++//
++// Depends on: lcHarness (live_claims_test.go); information_schema column/table/routine
++// privileges and pg_catalog (pg_proc, pg_class, aclexplode) for the matrix;
++// platform.OpenPool/OpenBuyerPool for the pool-authority validator; docker (the pinned PG
++// image, --pull=never) for the separate populated-upgrade cluster, exactly like the
++// existing historical-migration gates; migrations.Apply as the only migration runner.
++package foundation_test
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"errors"
++	"fmt"
++	"net/url"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"sort"
++	"strconv"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/jackc/pgx/v5"
++	"github.com/jackc/pgx/v5/pgxpool"
++
++	"livecommerce/internal/buyer"
++	"livecommerce/internal/claims"
++	"livecommerce/internal/command"
++	"livecommerce/internal/pagination"
++	"livecommerce/internal/platform"
++	"livecommerce/migrations"
++)
++
++var lcTables = []string{"live.offers", "live.claim_windows", "claims.bundles", "claims.lines", "claims.events", "claims.links"}
++
++// lcProbe runs one statement under a savepoint of tx and always rolls it back, so probes
++// cannot affect each other. want "" means success; otherwise the exact SQLSTATE. A
++// mismatch is reported with t.Errorf so one run lists every CHECK/FK finding.
++func lcProbe(t *testing.T, tx pgx.Tx, want, label, sql string, args ...any) {
++	t.Helper()
++	ctx := context.Background()
++	if _, err := tx.Exec(ctx, `SAVEPOINT lc_probe`); err != nil {
++		t.Fatalf("%s: savepoint: %v", label, err)
++	}
++	_, err := tx.Exec(ctx, sql, args...)
++	if _, rerr := tx.Exec(ctx, `ROLLBACK TO SAVEPOINT lc_probe`); rerr != nil {
++		t.Fatalf("%s: rollback to savepoint: %v", label, rerr)
++	}
++	if want == "" {
++		if err != nil {
++			t.Errorf("%s: unexpected error %v", label, err)
++		}
++		return
++	}
++	if got := sqlState(err); got != want {
++		t.Errorf("%s: sqlstate %q (%v), want %s", label, got, err, want)
++	}
++}
++
++func lcStrings(t *testing.T, pool *pgxpool.Pool, query string, args ...any) []string {
++	t.Helper()
++	rows, err := pool.Query(context.Background(), query, args...)
++	if err != nil {
++		t.Fatal(err)
++	}
++	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
++	if err != nil {
++		t.Fatal(err)
++	}
++	sort.Strings(out)
++	return out
++}
++
++func lcSet(values ...string) []string { out := append([]string(nil), values...); sort.Strings(out); return out }
++
++func lcSameSet(t *testing.T, label string, got, want []string) {
++	t.Helper()
++	g, w := lcSet(got...), lcSet(want...)
++	if strings.Join(g, "\n") != strings.Join(w, "\n") {
++		missing, extra := []string{}, []string{}
++		seen := map[string]bool{}
++		for _, v := range g {
++			seen[v] = true
++		}
++		for _, v := range w {
++			if !seen[v] {
++				missing = append(missing, v)
++			}
++			delete(seen, v)
++		}
++		for v := range seen {
++			extra = append(extra, v)
++		}
++		sort.Strings(extra)
++		t.Fatalf("%s mismatch\nmissing: %v\nextra:   %v", label, missing, extra)
++	}
++}
++
++// lcDirectMerchant runs fn in a merchant transaction with app.authz_revision set the way
++// IssueLink sets it (§4.2), so claims.issue_link can be called directly.
++func (h *lcHarness) directMerchant(token, store string, fn func(pgx.Tx, platform.Scope) error) error {
++	return h.do(token, store, func(tx pgx.Tx, s platform.Scope) error {
++		if _, err := tx.Exec(h.ctx, `SELECT set_config('app.authz_revision',$1,true)`, strconv.FormatInt(s.Revision, 10)); err != nil {
++			return err
++		}
++		return fn(tx, s)
++	})
++}
++
++// lcCountRows runs a counting query in a buyer transaction (definer calls).
++func (h *lcHarness) buyerCount(c buyer.Capability, query string, args ...any) (n int, err error) {
++	err = buyer.WithScope(h.ctx, h.a.runtime, c.Token, c.Scope.StoreID, func(ctx context.Context, tx pgx.Tx, _ buyer.Scope) error {
++		return tx.QueryRow(ctx, query, args...).Scan(&n)
++	})
++	return n, err
++}
++
++// lcClaimSetup opens a session in store A1 with offer A1 (sku0, max 5) and one ACCEPTED
++// bundle ("A1+2") with an issued link; returns session, offer, claim and link.
++func (h *lcHarness) claimSetup(t *testing.T, label string) (string, claims.Offer, claims.ManualClaimResult, claims.IssuedLink) {
++	t.Helper()
++	s := h.draft(t, h.f.storeA1)
++	h.open(t, s, claims.MatchExact)
++	o := h.offer(t, s, "A1", h.stock.skus[0].ID, 5)
++	r := h.accepted(t, s, "", label, "A1+2")
++	return s, o, r, h.link(t, s, r.BundleID, 0, false)
++}
++
++// TestLiveClaimsKC03Schema is KC03 (§3, §3.1, §3.2 matrix equality, §3.3 definers).
++func TestLiveClaimsKC03Schema(t *testing.T) {
++	h := lcSetup(t)
++	f, ctx := h.f, h.ctx
++
++	t.Run("fresh-migrated-twice", func(t *testing.T) {
++		// The shared fixture ran migrations.Apply twice on a fresh database.
++		if n := countRows(t, f.owner, `SELECT count(*) FROM public.lc_schema_migrations WHERE version='0060_live_claims.sql'`); n != 1 {
++			t.Fatalf("0060 ledger rows=%d", n)
++		}
++		if err := migrations.Apply(ctx, f.owner); err != nil {
++			t.Fatalf("third Apply: %v", err)
++		}
++		for _, table := range lcTables {
++			var rls, force bool
++			var comment string
++			if err := f.owner.QueryRow(ctx, `SELECT relrowsecurity,relforcerowsecurity,coalesce(obj_description(oid,'pg_class'),'') FROM pg_class WHERE oid=$1::regclass`, table).Scan(&rls, &force, &comment); err != nil {
++				t.Fatal(err)
++			}
++			if !rls || !force || !strings.Contains(comment, "internal/claims") {
++				t.Fatalf("%s rls=%t force=%t comment=%q (ENABLE+FORCE RLS and COMMENT ON naming the owner package, §3/§10)", table, rls, force, comment)
++			}
++		}
++		var login, super, bypass, createdb, createrole, replication bool
++		if err := f.owner.QueryRow(ctx, `SELECT rolcanlogin,rolsuper,rolbypassrls,rolcreatedb,rolcreaterole,rolreplication FROM pg_roles WHERE rolname='commerce_claims_writer'`).Scan(&login, &super, &bypass, &createdb, &createrole, &replication); err != nil {
++			t.Fatal(err)
++		}
++		if login || super || bypass || createdb || createrole || replication {
++			t.Fatal("commerce_claims_writer must be NOLOGIN without elevated attributes")
++		}
++		if n := countRows(t, f.owner, `SELECT count(*) FROM pg_auth_members WHERE roleid='commerce_claims_writer'::regrole OR member='commerce_claims_writer'::regrole`); n != 0 {
++			t.Fatalf("commerce_claims_writer has %d role memberships (no membership backfill, §3.2)", n)
++		}
++		var issuedDefault, expiresDefault *string
++		if err := f.owner.QueryRow(ctx, `SELECT max(column_default) FILTER (WHERE column_name='issued_at'),max(column_default) FILTER (WHERE column_name='expires_at')
++			FROM information_schema.columns WHERE table_schema='claims' AND table_name='links'`).Scan(&issuedDefault, &expiresDefault); err != nil {
++			t.Fatal(err)
++		}
++		if issuedDefault != nil || expiresDefault != nil {
++			t.Fatalf("claims.links issued_at/expires_at must have no DEFAULT (§3): %v %v", issuedDefault, expiresDefault)
++		}
++		if n := countRows(t, f.owner, `SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='claims' AND c.relkind IN ('r','p') `); n != 4 {
++			t.Fatalf("schema claims has %d tables, want bundles/lines/events/links", n)
++		}
++	})
++
++	t.Run("privilege-matrix", func(t *testing.T) {
++		cols := func(table string, except ...string) []string {
++			parts := strings.SplitN(table, ".", 2)
++			all := lcStrings(t, f.owner, `SELECT column_name::text FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2`, parts[0], parts[1])
++			out := []string{}
++			for _, c := range all {
++				skip := false
++				for _, e := range except {
++					skip = skip || c == e
++				}
++				if !skip {
++					out = append(out, c)
++				}
++			}
++			return out
++		}
++		var want []string
++		add := func(grantee, table, privilege string, columns ...string) {
++			for _, c := range columns {
++				want = append(want, grantee+" "+table+"."+c+" "+privilege)
++			}
++		}
++		const rt, wr = "commerce_runtime", "commerce_claims_writer"
++		add(rt, "live.offers", "SELECT", cols("live.offers")...)
++		add(rt, "live.offers", "INSERT", cols("live.offers")...)
++		add(rt, "live.offers", "UPDATE", "max_quantity_per_claim", "active", "activated_at", "version", "updated_at")
++		add(rt, "live.claim_windows", "SELECT", cols("live.claim_windows")...)
++		add(rt, "live.claim_windows", "INSERT", cols("live.claim_windows")...)
++		add(rt, "live.claim_windows", "UPDATE", "state", "match_mode", "generation", "opened_at", "closed_at", "version", "principal_id", "updated_at")
++		add(rt, "claims.bundles", "SELECT", cols("claims.bundles", "owner_id")...)
++		add(rt, "claims.bundles", "INSERT", "tenant_id", "store_id", "session_id", "platform", "actor_key", "label")
++		add(rt, "claims.bundles", "UPDATE", "line_count", "version", "updated_at")
++		add(rt, "claims.lines", "SELECT", cols("claims.lines")...)
++		add(rt, "claims.lines", "INSERT", cols("claims.lines", "applied_version")...)
++		add(rt, "claims.lines", "UPDATE", "quantity", "version", "updated_at")
++		add(rt, "claims.events", "SELECT", cols("claims.events")...)
++		add(rt, "claims.events", "INSERT", cols("claims.events")...)
++		add(rt, "claims.links", "SELECT", "tenant_id", "store_id", "bundle_id", "generation", "issued_at", "expires_at")
++		add(wr, "claims.links", "SELECT", "tenant_id", "store_id", "bundle_id", "token_hash", "generation", "expires_at")
++		add(wr, "claims.links", "INSERT", "tenant_id", "store_id", "bundle_id", "token_hash", "generation", "issued_at", "expires_at", "principal_id")
++		add(wr, "claims.links", "UPDATE", "token_hash", "generation", "issued_at", "expires_at", "principal_id")
++		add(wr, "claims.bundles", "SELECT", "tenant_id", "store_id", "id", "session_id", "owner_id", "bound_at", "version")
++		add(wr, "claims.bundles", "UPDATE", "owner_id", "bound_at")
++		add(wr, "claims.lines", "SELECT", "tenant_id", "store_id", "bundle_id", "offer_id", "sku_id", "quantity", "version", "applied_version")
++		add(wr, "claims.lines", "UPDATE", "applied_version")
++		add(wr, "live.offers", "SELECT", "tenant_id", "store_id", "id", "session_id", "keyword", "active")
++		add(wr, "identity.sessions", "SELECT", "token_hash", "principal_id", "audience", "revoked_at", "expires_at")
++		got := lcStrings(t, f.owner, `SELECT DISTINCT p.grantee::text||' '||p.table_schema||'.'||p.table_name||'.'||p.column_name||' '||p.privilege_type
++			FROM information_schema.column_privileges p
++			JOIN pg_class c ON c.oid=format('%I.%I',p.table_schema,p.table_name)::regclass
++			WHERE p.grantee::text<>pg_get_userbyid(c.relowner)
++			  AND (format('%s.%s',p.table_schema,p.table_name)=ANY($1) OR p.grantee='commerce_claims_writer')`, lcTables)
++		lcSameSet(t, "§3.2 column privilege matrix", got, want)
++		tableWant := []string{rt + " live.offers SELECT", rt + " live.offers INSERT", rt + " live.claim_windows SELECT", rt + " live.claim_windows INSERT",
++			rt + " claims.lines SELECT", rt + " claims.events SELECT", rt + " claims.events INSERT"}
++		tableGot := lcStrings(t, f.owner, `SELECT p.grantee::text||' '||p.table_schema||'.'||p.table_name||' '||p.privilege_type
++			FROM information_schema.table_privileges p JOIN pg_class c ON c.oid=format('%I.%I',p.table_schema,p.table_name)::regclass
++			WHERE p.grantee::text<>pg_get_userbyid(c.relowner)
++			  AND (format('%s.%s',p.table_schema,p.table_name)=ANY($1) OR p.grantee='commerce_claims_writer')`, lcTables)
++		lcSameSet(t, "§3.2 table-level privileges", tableGot, tableWant)
++		lcSameSet(t, "commerce_claims_writer EXECUTE", lcStrings(t, f.owner, `SELECT DISTINCT routine_schema||'.'||routine_name FROM information_schema.routine_privileges WHERE grantee='commerce_claims_writer'`),
++			[]string{"claims.issue_link", "claims.mark_applied", "claims.preview_link", "claims.redeem_link", "identity.resolve_access"})
++		lcSameSet(t, "schema claims ACL", lcStrings(t, f.owner, `SELECT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END||' '||a.privilege_type
++			FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a WHERE n.nspname='claims' AND a.grantee<>n.nspowner`),
++			[]string{"commerce_buyer_runtime USAGE", "commerce_claims_writer USAGE", "commerce_runtime USAGE"})
++		var usage []bool
++		if err := f.owner.QueryRow(ctx, `SELECT ARRAY[has_schema_privilege('commerce_claims_writer','live','USAGE'),has_schema_privilege('commerce_claims_writer','identity','USAGE'),
++			has_schema_privilege('commerce_claims_writer','claims','USAGE')]`).Scan(&usage); err != nil || !usage[0] || !usage[1] || !usage[2] {
++			t.Fatalf("writer schema USAGE live/identity/claims: %v %v", usage, err)
++		}
++		if n := countRows(t, f.owner, `SELECT count(*) FROM pg_namespace WHERE nspname NOT LIKE 'pg\_%' AND nspname<>'information_schema' AND has_schema_privilege('commerce_claims_writer',oid,'CREATE')`); n != 0 {
++			t.Fatalf("writer can CREATE in %d schemas", n)
++		}
++		// No other commerce_* role (nor PUBLIC) holds any privilege on the six tables; the
++		// buyer runtime has none on any claims.* or live.* table (§3.2).
++		denied := lcStrings(t, f.owner, `SELECT r.rolname||' '||c.oid::regclass::text FROM pg_roles r CROSS JOIN pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
++			WHERE r.rolname LIKE 'commerce\_%' AND r.rolname NOT IN ('commerce_runtime','commerce_claims_writer')
++			  AND c.relkind IN ('r','p','v','m') AND (c.oid::regclass::text=ANY($1) OR (r.rolname='commerce_buyer_runtime' AND n.nspname IN ('claims','live')))
++			  AND (has_table_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR has_any_column_privilege(r.oid,c.oid,'SELECT,INSERT,UPDATE,REFERENCES'))`, lcTables)
++		if len(denied) != 0 {
++			t.Fatalf("foreign roles hold claims table privileges: %v", denied)
++		}
++		if n := countRows(t, f.owner, `SELECT count(*) FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a WHERE c.oid::regclass::text=ANY($1) AND a.grantee=0`, lcTables); n != 0 {
++			t.Fatal("PUBLIC holds a claims table privilege")
++		}
++		for _, table := range lcTables {
++			var del, trunc bool
++			if err := f.owner.QueryRow(ctx, `SELECT has_table_privilege('commerce_runtime',$1,'DELETE'),has_table_privilege('commerce_runtime',$1,'TRUNCATE')`, table).Scan(&del, &trunc); err != nil || del || trunc {
++				t.Fatalf("%s runtime DELETE=%t TRUNCATE=%t %v (no DELETE grant, §3)", table, del, trunc, err)
++			}
++		}
++	})
++
++	t.Run("definers", func(t *testing.T) {
++		type fnRow struct{ name, args, result, owner, config, volatility, comment, acl string }
++		want := map[string]fnRow{
++			"issue_link": {args: "p_auth_hash bytea, p_store uuid, p_session uuid, p_bundle uuid, p_expected_generation bigint, p_new_hash bytea, p_release boolean",
++				result: "TABLE(generation bigint, expires_at timestamp with time zone, released boolean)", volatility: "v", acl: "commerce_claims_writer:EXECUTE,commerce_runtime:EXECUTE"},
++			"mark_applied": {args: "p_bundle uuid, p_offers uuid[], p_versions bigint[]", result: "integer", volatility: "v", acl: "commerce_buyer_runtime:EXECUTE,commerce_claims_writer:EXECUTE"},
++			"preview_link": {args: "p_hash bytea", result: "TABLE(bundle_version bigint, bound boolean, expires_at timestamp with time zone, offer_id uuid, keyword text, sku_id uuid, quantity integer, pending boolean, offer_active boolean)",
++				volatility: "s", acl: "commerce_buyer_runtime:EXECUTE,commerce_claims_writer:EXECUTE"},
++			"redeem_link": {args: "p_hash bytea, p_expected_version bigint", result: "TABLE(bundle_id uuid, bundle_version bigint, offer_id uuid, sku_id uuid, quantity integer, line_version bigint, pending boolean, offer_active boolean)",
++				volatility: "v", acl: "commerce_buyer_runtime:EXECUTE,commerce_claims_writer:EXECUTE"},
++		}
++		rows, err := f.owner.Query(ctx, `SELECT p.proname::text,pg_get_function_identity_arguments(p.oid),pg_get_function_result(p.oid),p.prosecdef,pg_get_userbyid(p.proowner)::text,
++			coalesce(array_to_string(p.proconfig,','),''),p.provolatile::text,coalesce(obj_description(p.oid,'pg_proc'),''),
++			coalesce((SELECT string_agg(x.acl,',' ORDER BY x.acl) FROM (SELECT CASE WHEN a.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee)::text END||':'||a.privilege_type AS acl
++				FROM aclexplode(p.proacl) a) x),'')
++			FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='claims'`)
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer rows.Close()
++		seen := 0
++		for rows.Next() {
++			var r fnRow
++			var definer bool
++			if err := rows.Scan(&r.name, &r.args, &r.result, &definer, &r.owner, &r.config, &r.volatility, &r.comment, &r.acl); err != nil {
++				t.Fatal(err)
++			}
++			w, ok := want[r.name]
++			if !ok {
++				t.Fatalf("unexpected function claims.%s", r.name)
++			}
++			seen++
++			caller := "commerce_buyer_runtime"
++			if r.name == "issue_link" {
++				caller = "commerce_runtime"
++			}
++			if !definer || r.owner != "commerce_claims_writer" || r.config != "search_path=pg_catalog" || r.args != w.args || r.result != w.result ||
++				r.volatility != w.volatility || r.acl != w.acl || !strings.Contains(r.comment, "internal/claims") || !strings.Contains(r.comment, caller) {
++				t.Fatalf("claims.%s definer shape %+v (definer=%t), want %+v", r.name, r, definer, w)
++			}
++		}
++		if rows.Err() != nil || seen != 4 {
++			t.Fatalf("claims functions seen=%d err=%v", seen, rows.Err())
++		}
++		if n := countRows(t, f.owner, `SELECT (SELECT count(*) FROM pg_proc WHERE proowner='commerce_claims_writer'::regrole)+(SELECT count(*) FROM pg_class WHERE relowner='commerce_claims_writer'::regrole)+(SELECT count(*) FROM pg_namespace WHERE nspowner='commerce_claims_writer'::regrole)`); n != 4 {
++			t.Fatalf("commerce_claims_writer owns %d objects, want exactly its four functions", n)
++		}
++		denied := lcStrings(t, f.owner, `SELECT r.rolname||' '||p.proname FROM pg_roles r CROSS JOIN pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
++			WHERE n.nspname='claims' AND r.rolname LIKE 'commerce\_%' AND has_function_privilege(r.oid,p.oid,'EXECUTE')
++			  AND NOT (r.rolname='commerce_claims_writer' OR (r.rolname='commerce_runtime' AND p.proname='issue_link')
++			       OR (r.rolname='commerce_buyer_runtime' AND p.proname IN ('preview_link','redeem_link','mark_applied')))`)
++		if len(denied) != 0 {
++			t.Fatalf("unexpected EXECUTE on claims definers: %v", denied)
++		}
++	})
++
++	t.Run("checks-and-keys", func(t *testing.T) {
++		s, s2 := h.draft(t, f.storeA1), h.draft(t, f.storeA1)
++		sku0, sku1 := h.stock.skus[0].ID, h.stock.skus[1].ID
++		foreignSKU := lcSKUs(t, f, f.tenantA, f.storeA2, "USD", 1)[0]
++		tx, err := f.owner.Begin(ctx)
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer tx.Rollback(ctx)
++		exec := func(sql string, args ...any) {
++			t.Helper()
++			if _, err := tx.Exec(ctx, sql, args...); err != nil {
++				t.Fatalf("base row: %v", err)
++			}
++		}
++		now := time.Now().UTC().Truncate(time.Microsecond)
++		a, st, actor := f.tenantA, f.storeA1, h.actor
++		// live.claim_windows (probed on s2, which never keeps a window row).
++		win := `INSERT INTO live.claim_windows(tenant_id,store_id,session_id,state,match_mode,generation,opened_at,closed_at,principal_id,version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
++		later, earlier := now.Add(time.Second), now.Add(-time.Second)
++		for _, c := range []struct {
++			want, state, mode string
++			gen               int64
++			opened, closed    any
++			version           int64
++		}{
++			{"", "OPEN", "EXACT", 1, now, nil, 1}, {"", "CLOSED", "EXACT", 0, nil, nil, 1}, {"", "CLOSED", "KEYWORD_QTY_ONLY", 2, now, now, 1}, {"", "CLOSED", "EXACT", 2, now, later, 7},
++			{"23514", "OPEN", "EXACT", 0, now, nil, 1}, {"23514", "OPEN", "EXACT", 1, nil, nil, 1}, {"23514", "OPEN", "EXACT", 1, now, later, 1},
++			{"23514", "CLOSED", "EXACT", 0, now, nil, 1}, {"23514", "CLOSED", "EXACT", 0, nil, now, 1}, {"23514", "CLOSED", "EXACT", 1, nil, nil, 1},
++			{"23514", "CLOSED", "EXACT", 1, now, nil, 1}, {"23514", "CLOSED", "EXACT", 1, now, earlier, 1}, {"23514", "PAUSED", "EXACT", 0, nil, nil, 1},
++			{"23514", "CLOSED", "CONTAINS", 0, nil, nil, 1}, {"23514", "CLOSED", "EXACT", -1, nil, nil, 1}, {"23514", "CLOSED", "EXACT", 0, nil, nil, 0},
++		} {
++			lcProbe(t, tx, c.want, fmt.Sprintf("window %+v", c), win, a, st, s2, c.state, c.mode, c.gen, c.opened, c.closed, actor, c.version)
++		}
++		lcProbe(t, tx, "23503", "window without session", win, a, st, randomUUID(), "CLOSED", "EXACT", 0, nil, nil, actor, 1)
++		lcProbe(t, tx, "23503", "window principal outside tenant", win, a, st, s2, "CLOSED", "EXACT", 0, nil, nil, randomUUID(), 1)
++		exec(`INSERT INTO live.claim_windows(tenant_id,store_id,session_id,state,match_mode,generation,principal_id) VALUES($1,$2,$3,'CLOSED','EXACT',0,$4)`, a, st, s, actor)
++		// live.offers.
++		offerA, offerB, offerOther := randomUUID(), randomUUID(), randomUUID()
++		off := `INSERT INTO live.offers(tenant_id,store_id,id,session_id,keyword,sku_id,max_quantity_per_claim,active,version,principal_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`
++		exec(off, a, st, offerA, s, "A1", sku0, 3, true, 1, actor)
++		exec(off, a, st, offerB, s, "B2", sku1, 999, true, 1, actor)
++		exec(off, a, st, offerOther, s2, "C3", sku0, 3, true, 1, actor)
++		for _, c := range []struct {
++			want, keyword, sku string
++			max                int
++			active             bool
++			version            int
++		}{
++			{"", "P1", sku0, 1, false, 1}, {"", "P2", sku0, 999, false, 1}, {"", "ABCDEFGHIJKLMNOP", sku0, 1, false, 1},
++			{"23514", "a1", sku0, 1, false, 1}, {"23514", "A1+2", sku0, 1, false, 1}, {"23514", "", sku0, 1, false, 1}, {"23514", "ABCDEFGHIJKLMNOPQ", sku0, 1, false, 1},
++			{"23514", "Ａ1", sku0, 1, false, 1}, {"23514", "A 1", sku0, 1, false, 1}, {"23514", "P3", sku0, 0, false, 1}, {"23514", "P3", sku0, 1000, false, 1},
++			{"23514", "P3", sku0, 1, false, 0}, {"23505", "A1", sku1, 1, false, 1}, {"23505", "P4", sku0, 1, true, 1}, {"23503", "P5", foreignSKU, 1, false, 1},
++			{"23503", "P6", randomUUID(), 1, false, 1},
++		} {
++			lcProbe(t, tx, c.want, fmt.Sprintf("offer %+v", c), off, a, st, randomUUID(), s, c.keyword, c.sku, c.max, c.active, c.version, actor)
++		}
++		lcProbe(t, tx, "", "two inactive offers on one SKU (partial unique index)", `INSERT INTO live.offers(tenant_id,store_id,session_id,keyword,sku_id,max_quantity_per_claim,active,principal_id)
++			VALUES($1,$2,$3,'I1',$4,1,false,$5),($1,$2,$3,'I2',$4,1,false,$5)`, a, st, s, sku0, actor)
++		lcProbe(t, tx, "23503", "offer without session", off, a, st, randomUUID(), randomUUID(), "P7", sku0, 1, false, 1, actor)
++		// claims.bundles.
++		bundle, bundle2 := randomUUID(), randomUUID()
++		actorKey := hex.EncodeToString(randomBytes(32))
++		bun := `INSERT INTO claims.bundles(tenant_id,store_id,id,session_id,platform,actor_key,label,owner_id,bound_at,line_count,version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`
++		exec(bun, a, st, bundle, s, "manual", actorKey, "amy", nil, nil, 1, 1)
++		exec(bun, a, st, bundle2, s, "manual", hex.EncodeToString(randomBytes(32)), "bob", nil, nil, 0, 0)
++		otherOwner := mustIssue(t, h.service, f.storeA2).Scope.OwnerID
++		for _, c := range []struct {
++			want, platform, key string
++			label, owner, bound any
++			lines, version      int
++		}{
++			{"", "manual", "", strings.Repeat("x", 60), nil, nil, 0, 0}, {"", "manual", "", "陳小美", h.cap.Scope.OwnerID, now, 50, 3},
++			{"23514", "facebook", "", "fb", nil, nil, 0, 0}, {"23514", "manual", strings.ToUpper(hex.EncodeToString(randomBytes(32))), "u1", nil, nil, 0, 0},
++			{"23514", "manual", hex.EncodeToString(randomBytes(32))[:63], "u2", nil, nil, 0, 0}, {"23514", "manual", "", nil, nil, nil, 0, 0},
++			{"23514", "manual", "", " amy2", nil, nil, 0, 0}, {"23514", "manual", "", "", nil, nil, 0, 0}, {"23514", "manual", "", strings.Repeat("x", 61), nil, nil, 0, 0},
++			{"23514", "manual", "", "a\x07b", nil, nil, 0, 0}, {"23514", "manual", "", "u3", nil, nil, 51, 0}, {"23514", "manual", "", "u4", nil, nil, -1, 0},
++			{"23514", "manual", "", "u5", nil, nil, 0, -1}, {"23514", "manual", "", "u6", h.cap.Scope.OwnerID, nil, 0, 0}, {"23514", "manual", "", "u7", nil, now, 0, 0},
++			{"23505", "manual", actorKey, "u8", nil, nil, 0, 0}, {"23505", "manual", "", "amy", nil, nil, 0, 0},
++			{"23503", "manual", "", "u9", randomUUID(), now, 0, 0}, {"23503", "manual", "", "u10", otherOwner, now, 0, 0},
++		} {
++			key := c.key
++			if key == "" {
++				key = hex.EncodeToString(randomBytes(32))
++			}
++			lcProbe(t, tx, c.want, fmt.Sprintf("bundle %+v", c), bun, a, st, randomUUID(), s, c.platform, key, c.label, c.owner, c.bound, c.lines, c.version)
++		}
++		lcProbe(t, tx, "23503", "bundle of a session without window", bun, a, st, randomUUID(), s2, "manual", hex.EncodeToString(randomBytes(32)), "w1", nil, nil, 0, 0)
++		// claims.lines.
++		line := `INSERT INTO claims.lines(tenant_id,store_id,session_id,bundle_id,offer_id,sku_id,quantity,version,applied_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`
++		exec(line, a, st, s, bundle, offerA, sku0, 1, 1, nil)
++		for _, c := range []struct {
++			want, bundle, offer, sku string
++			qty, version             int
++			applied                  any
++		}{
++			{"", bundle, offerB, sku1, 999, 2, 2}, {"", bundle, offerB, sku1, 1, 1, nil},
++			{"23514", bundle, offerB, sku1, 0, 1, nil}, {"23514", bundle, offerB, sku1, 1000, 1, nil}, {"23514", bundle, offerB, sku1, 1, 0, nil},
++			{"23514", bundle, offerB, sku1, 1, 2, 0}, {"23514", bundle, offerB, sku1, 1, 2, 3},
++			{"23503", bundle, offerB, sku0, 1, 1, nil}, {"23503", bundle, offerOther, sku0, 1, 1, nil}, {"23503", randomUUID(), offerB, sku1, 1, 1, nil},
++			{"23505", bundle, offerA, sku0, 2, 2, nil},
++		} {
++			lcProbe(t, tx, c.want, fmt.Sprintf("line %+v", c), line, a, st, s, c.bundle, c.offer, c.sku, c.qty, c.version, c.applied)
++		}
++		// claims.events: every §3.1 row positive, then each CHECK negated.
++		var hasBundleVersion bool
++		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='claims' AND table_name='events' AND column_name='bundle_version')`).Scan(&hasBundleVersion); err != nil {
++			t.Fatal(err)
++		}
++		type ev map[string]any
++		event := func(e ev) (string, []any) {
++			row := ev{"tenant_id": a, "store_id": st, "session_id": s, "window_generation": 1, "source_kind": "manual", "source_event_id": randomUUID(), "platform": "manual",
++				"occurred_at": time.Now(), "grammar_version": "kw-v1", "match_mode": "EXACT", "principal_id": actor}
++			for k, v := range e {
++				row[k] = v
++			}
++			if _, set := e["bundle_version"]; hasBundleVersion && !set && row["outcome"] == "ACCEPTED" {
++				row["bundle_version"] = 1 // §0.1 P2(c) persisted column: required iff ACCEPTED
++			}
++			names := make([]string, 0, len(row))
++			for k := range row {
++				names = append(names, k)
++			}
++			sort.Strings(names)
++			args, marks := make([]any, len(names)), make([]string, len(names))
++			for i, n := range names {
++				args[i], marks[i] = row[n], "$"+strconv.Itoa(i+1)
++			}
++			return `INSERT INTO claims.events(` + strings.Join(names, ",") + `) VALUES(` + strings.Join(marks, ",") + `)`, args
++		}
++		probeEvent := func(want, label string, e ev) {
++			t.Helper()
++			sql, args := event(e)
++			lcProbe(t, tx, want, "event "+label, sql, args...)
++		}
++		rej := func(kind, reason string, extra ev) ev {
++			e := ev{"grammar_kind": kind, "outcome": "REJECTED", "reason": reason}
++			for k, v := range extra {
++				e[k] = v
++			}
++			return e
++		}
++		acc := func(extra ev) ev {
++			e := ev{"grammar_kind": "MATCH", "outcome": "ACCEPTED", "offer_id": offerA, "quantity": 1, "explicit_quantity": false, "bundle_id": bundle, "line_version": 1}
++			for k, v := range extra {
++				e[k] = v
++			}
++			return e
++		}
++		withOffer := func(q any, explicit any) ev { return ev{"offer_id": offerA, "quantity": q, "explicit_quantity": explicit} }
++		for label, e := range map[string]ev{
++			"NO_MATCH":                   rej("NO_MATCH", "NO_MATCH", nil),
++			"UNKNOWN_KEYWORD/MATCH":      rej("MATCH", "UNKNOWN_KEYWORD", nil),
++			"UNKNOWN_KEYWORD/INVALID":    rej("INVALID_QUANTITY", "UNKNOWN_KEYWORD", nil),
++			"OFFER_INACTIVE/MATCH":       rej("MATCH", "OFFER_INACTIVE", withOffer(1, false)),
++			"OFFER_INACTIVE/INVALID":     rej("INVALID_QUANTITY", "OFFER_INACTIVE", ev{"offer_id": offerA}),
++			"INVALID_QUANTITY":           rej("INVALID_QUANTITY", "INVALID_QUANTITY", ev{"offer_id": offerA}),
++			"QUANTITY_REQUIRED":          rej("MATCH", "QUANTITY_REQUIRED", ev{"offer_id": offerA, "quantity": 1, "explicit_quantity": false, "match_mode": "KEYWORD_QTY_ONLY"}),
++			"QUANTITY_OVER_MAX":          rej("MATCH", "QUANTITY_OVER_MAX", withOffer(5, true)),
++			"BUNDLE_LIMIT":               rej("MATCH", "BUNDLE_LIMIT", withOffer(2, true)),
++			"ACCEPTED new line":          acc(nil),
++			"ACCEPTED update":            acc(ev{"quantity": 3, "explicit_quantity": true, "line_version": 2, "previous_quantity": 1}),
++			"ACCEPTED KEYWORD_QTY_ONLY":  acc(ev{"quantity": 999, "explicit_quantity": true, "match_mode": "KEYWORD_QTY_ONLY"}),
++			"occurred 119s in the future": rej("NO_MATCH", "NO_MATCH", ev{"occurred_at": time.Now().Add(110 * time.Second)}),
++		} {
++			probeEvent("", label, e)
++		}
++		for label, e := range map[string]ev{
++			"NO_MATCH reason, MATCH kind":            rej("MATCH", "NO_MATCH", nil),
++			"NO_MATCH kind, UNKNOWN reason":          rej("NO_MATCH", "UNKNOWN_KEYWORD", nil),
++			"NO_MATCH kind accepted":                 acc(ev{"grammar_kind": "NO_MATCH"}),
++			"NO_MATCH with offer":                    rej("NO_MATCH", "NO_MATCH", ev{"offer_id": offerA}),
++			"UNKNOWN_KEYWORD with offer":             rej("MATCH", "UNKNOWN_KEYWORD", withOffer(1, false)),
++			"UNKNOWN_KEYWORD with quantity":          rej("MATCH", "UNKNOWN_KEYWORD", ev{"quantity": 1, "explicit_quantity": false}),
++			"OFFER_INACTIVE without offer":           rej("MATCH", "OFFER_INACTIVE", nil),
++			"OFFER_INACTIVE/MATCH without quantity":  rej("MATCH", "OFFER_INACTIVE", ev{"offer_id": offerA}),
++			"OFFER_INACTIVE/INVALID with quantity":   rej("INVALID_QUANTITY", "OFFER_INACTIVE", withOffer(1, false)),
++			"INVALID_QUANTITY reason, MATCH kind":    rej("MATCH", "INVALID_QUANTITY", withOffer(1, false)),
++			"INVALID_QUANTITY with quantity":         rej("INVALID_QUANTITY", "INVALID_QUANTITY", withOffer(1, true)),
++			"INVALID_QUANTITY kind, OVER_MAX reason": rej("INVALID_QUANTITY", "QUANTITY_OVER_MAX", ev{"offer_id": offerA}),
++			"INVALID_QUANTITY kind, BUNDLE_LIMIT":    rej("INVALID_QUANTITY", "BUNDLE_LIMIT", ev{"offer_id": offerA}),
++			"QUANTITY_REQUIRED in EXACT":             rej("MATCH", "QUANTITY_REQUIRED", withOffer(1, false)),
++			"QUANTITY_REQUIRED explicit":             rej("MATCH", "QUANTITY_REQUIRED", ev{"offer_id": offerA, "quantity": 1, "explicit_quantity": true, "match_mode": "KEYWORD_QTY_ONLY"}),
++			"quantity without explicit":              rej("MATCH", "QUANTITY_OVER_MAX", withOffer(5, nil)),
++			"explicit without quantity":              rej("INVALID_QUANTITY", "INVALID_QUANTITY", ev{"offer_id": offerA, "explicit_quantity": true}),
++			"ACCEPTED with reason":                   acc(ev{"reason": "QUANTITY_OVER_MAX"}),
++			"ACCEPTED without bundle":                acc(ev{"bundle_id": nil}),
++			"ACCEPTED without line_version":          acc(ev{"line_version": nil}),
++			"ACCEPTED without quantity":              acc(ev{"quantity": nil, "explicit_quantity": nil}),
++			"ACCEPTED without offer":                 acc(ev{"offer_id": nil, "quantity": nil, "explicit_quantity": nil}),
++			"REJECTED with bundle":                   rej("MATCH", "QUANTITY_OVER_MAX", ev{"offer_id": offerA, "quantity": 5, "explicit_quantity": true, "bundle_id": bundle}),
++			"REJECTED with line_version":             rej("MATCH", "QUANTITY_OVER_MAX", ev{"offer_id": offerA, "quantity": 5, "explicit_quantity": true, "line_version": 1}),
++			"REJECTED with previous":                 rej("MATCH", "QUANTITY_OVER_MAX", ev{"offer_id": offerA, "quantity": 5, "explicit_quantity": true, "previous_quantity": 1}),
++			"REJECTED without reason":                rej("MATCH", "", ev{"reason": nil, "offer_id": offerA, "quantity": 5, "explicit_quantity": true}),
++			"source meta":                            rej("NO_MATCH", "NO_MATCH", ev{"source_kind": "meta"}),
++			"platform facebook":                      rej("NO_MATCH", "NO_MATCH", ev{"platform": "facebook"}),
++			"grammar kw-v2":                          rej("NO_MATCH", "NO_MATCH", ev{"grammar_version": "kw-v2"}),
++			"manual without principal":               rej("NO_MATCH", "NO_MATCH", ev{"principal_id": nil}),
++			"occurred beyond +120s":                  rej("NO_MATCH", "NO_MATCH", ev{"occurred_at": time.Now().Add(130 * time.Second)}),
++			"generation 0":                           rej("NO_MATCH", "NO_MATCH", ev{"window_generation": 0}),
++			"unknown reason":                         rej("MATCH", "CONTAINS", nil),
++			"unknown outcome":                        ev{"grammar_kind": "NO_MATCH", "outcome": "PENDING", "reason": "NO_MATCH"},
++			"unknown kind":                           rej("PARTIAL", "NO_MATCH", nil),
++			"unknown mode":                           rej("NO_MATCH", "NO_MATCH", ev{"match_mode": "CONTAINS"}),
++			"quantity 0":                             rej("MATCH", "QUANTITY_OVER_MAX", withOffer(0, true)),
++			"quantity 1000":                          rej("MATCH", "QUANTITY_OVER_MAX", withOffer(1000, true)),
++			"line_version 0":                         acc(ev{"line_version": 0}),
++			"previous 1000":                          acc(ev{"line_version": 2, "previous_quantity": 1000}),
++		} {
++			probeEvent("23514", label, e)
++		}
++		if hasBundleVersion {
++			probeEvent("23514", "bundle_version on REJECTED", rej("MATCH", "QUANTITY_OVER_MAX", ev{"offer_id": offerA, "quantity": 5, "explicit_quantity": true, "bundle_version": 1}))
++			probeEvent("23514", "ACCEPTED without bundle_version", acc(ev{"bundle_version": nil}))
++		}
++		probeEvent("23503", "offer of another session", rej("MATCH", "QUANTITY_OVER_MAX", ev{"offer_id": offerOther, "quantity": 5, "explicit_quantity": true}))
++		probeEvent("23503", "ACCEPTED without its line", acc(ev{"offer_id": offerB}))
++		probeEvent("23503", "session without window", rej("NO_MATCH", "NO_MATCH", ev{"session_id": s2}))
++		probeEvent("23503", "principal outside tenant", rej("NO_MATCH", "NO_MATCH", ev{"principal_id": randomUUID()}))
++		source := randomUUID()
++		sql, args := event(rej("NO_MATCH", "NO_MATCH", ev{"source_event_id": source}))
++		exec(sql, args...)
++		probeEvent("23505", "duplicate source_event_id", rej("MATCH", "UNKNOWN_KEYWORD", ev{"source_event_id": source}))
++		sql, args = event(acc(nil))
++		exec(sql, args...)
++		probeEvent("23505", "duplicate ACCEPTED line_version", acc(ev{"quantity": 2, "explicit_quantity": true}))
++		probeEvent("", "REJECTED rows share no line_version index", rej("MATCH", "QUANTITY_OVER_MAX", withOffer(5, true)))
++		// claims.links: exact 72 h TTL window in the database (§3, P2(g)).
++		link := `INSERT INTO claims.links(tenant_id,store_id,bundle_id,token_hash,generation,issued_at,expires_at,principal_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`
++		hash := randomBytes(32)
++		for _, c := range []struct {
++			want    string
++			hash    []byte
++			gen     int
++			expires time.Time
++			bundle  string
++			member  string
++		}{
++			{"", randomBytes(32), 1, now.Add(72 * time.Hour), bundle, actor}, {"", randomBytes(32), 9, now.Add(time.Microsecond), bundle, actor},
++			{"23514", randomBytes(31), 1, now.Add(time.Hour), bundle, actor}, {"23514", randomBytes(33), 1, now.Add(time.Hour), bundle, actor},
++			{"23514", randomBytes(32), 0, now.Add(time.Hour), bundle, actor}, {"23514", randomBytes(32), 1, now, bundle, actor},
++			{"23514", randomBytes(32), 1, now.Add(-time.Second), bundle, actor}, {"23514", randomBytes(32), 1, now.Add(72*time.Hour + time.Microsecond), bundle, actor},
++			{"23503", randomBytes(32), 1, now.Add(time.Hour), randomUUID(), actor}, {"23503", randomBytes(32), 1, now.Add(time.Hour), bundle, randomUUID()},
++		} {
++			lcProbe(t, tx, c.want, fmt.Sprintf("link gen=%d len=%d ttl=%v", c.gen, len(c.hash), c.expires.Sub(now)), link, a, st, c.bundle, c.hash, c.gen, now, c.expires, c.member)
++		}
++		lcProbe(t, tx, "23502", "link without issued_at (no DEFAULT)", `INSERT INTO claims.links(tenant_id,store_id,bundle_id,token_hash,generation,expires_at,principal_id) VALUES($1,$2,$3,$4,1,$5,$6)`,
++			a, st, bundle, randomBytes(32), now.Add(time.Hour), actor)
++		exec(link, a, st, bundle, hash, 1, now, now.Add(72*time.Hour), actor)
++		lcProbe(t, tx, "23505", "token_hash reused by another bundle", link, a, st, bundle2, hash, 1, now, now.Add(time.Hour), actor)
++		lcProbe(t, tx, "23505", "second link row for one bundle", link, a, st, bundle, randomBytes(32), 2, now, now.Add(time.Hour), actor)
++		lcProbe(t, tx, "23514", "rotation beyond 72h", `UPDATE claims.links SET expires_at=issued_at+interval '72 hours 1 microsecond' WHERE bundle_id=$1`, bundle)
++		lcProbe(t, tx, "", "rotation exactly 72h", `UPDATE claims.links SET issued_at=$2,expires_at=$2::timestamptz+interval '72 hours' WHERE bundle_id=$1`, bundle, now.Add(time.Minute))
++	})
++
++	t.Run("foreign-roles-denied", func(t *testing.T) {
++		roles := []string{"commerce_buyer_runtime", "commerce_buyer_issuer", "commerce_buyer_writer", "commerce_identity", "commerce_identity_writer", "commerce_auth",
++			"commerce_worker", "commerce_checkout_runtime", "commerce_checkout_writer", "commerce_hosted_runtime", "commerce_integration_writer", "commerce_inventory_writer",
++			"commerce_meta_ingress", "commerce_meta_registrar", "commerce_meta_curator", "commerce_meta_consumer", "commerce_meta_writer", "commerce_meta_worker",
++			"commerce_media_registrar", "commerce_media_writer", "commerce_media_worker", "commerce_media_executor", "commerce_media_recovery"}
++		for _, role := range roles {
++			for _, table := range lcTables {
++				for _, q := range []string{`SELECT 1 FROM ` + table + ` LIMIT 1`, `INSERT INTO ` + table + ` DEFAULT VALUES`, `UPDATE ` + table + ` SET tenant_id=tenant_id`, `DELETE FROM ` + table} {
++					tx, err := f.owner.Begin(ctx)
++					if err != nil {
++						t.Fatal(err)
++					}
++					_, err = tx.Exec(ctx, `SET LOCAL ROLE `+pgx.Identifier{role}.Sanitize())
++					if err == nil {
++						_, err = tx.Exec(ctx, q)
++					}
++					_ = tx.Rollback(ctx)
++					if sqlState(err) != "42501" {
++						t.Fatalf("%s: %q sqlstate %q (%v), want 42501", role, q, sqlState(err), err)
++					}
++				}
++			}
++		}
++	})
++
++	t.Run("release-only-with-rotation", func(t *testing.T) {
++		// Catalog enumeration: every function a runtime or buyer-runtime login can execute
++		// that references claims.bundles or claims.links is one of the four definers.
++		lcSameSet(t, "functions reaching claims bindings/links", lcStrings(t, f.owner, `SELECT p.oid::regprocedure::text FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
++			WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND p.prosrc ~* 'claims\.(bundles|links)'
++			  AND (has_function_privilege('commerce_runtime',p.oid,'EXECUTE') OR has_function_privilege('commerce_buyer_runtime',p.oid,'EXECUTE'))`),
++			[]string{"claims.issue_link(bytea,uuid,uuid,uuid,bigint,bytea,boolean)", "claims.mark_applied(uuid,uuid[],bigint[])", "claims.preview_link(bytea)", "claims.redeem_link(bytea,bigint)"})
++		lcSameSet(t, "roles able to write owner_id", lcStrings(t, f.owner, `SELECT DISTINCT p.grantee::text FROM information_schema.column_privileges p
++			WHERE p.table_schema='claims' AND p.table_name='bundles' AND p.column_name IN ('owner_id','bound_at') AND p.privilege_type='UPDATE'
++			  AND p.grantee::text<>(SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid='claims.bundles'::regclass)`), []string{"commerce_claims_writer"})
++		// Direct call of each definer on a bound bundle.
++		s, o, r, l := h.claimSetup(t, "rotation-proof")
++		owner1, owner2 := h.cap, mustIssue(t, h.service, f.storeA1)
++		red, err := h.redeem(owner1, t04Key("lc-redeem"), l.Token, r.BundleVersion)
++		if err != nil || lcOwner(t, f, r.BundleID) != owner1.Scope.OwnerID {
++			t.Fatalf("bind: %+v %v", red, err)
++		}
++		hash := tokenHash(string(l.Token))
++		for _, q := range []struct {
++			c     buyer.Capability
++			query string
++			args  []any
++			want  int
++		}{
++			{owner1, `SELECT count(*) FROM claims.preview_link($1)`, []any{hash}, 1},
++			{owner1, `SELECT count(*) FROM claims.redeem_link($1,$2)`, []any{hash, r.BundleVersion}, 1},
++			{owner1, `SELECT claims.mark_applied($1,ARRAY[$2]::uuid[],ARRAY[$3]::bigint[])`, []any{r.BundleID, o.ID, r.LineVersion}, 1},
++			{owner2, `SELECT count(*) FROM claims.redeem_link($1,$2)`, []any{hash, r.BundleVersion}, 0},
++			{owner2, `SELECT count(*) FROM claims.preview_link($1)`, []any{hash}, 0},
++		} {
++			if n, err := h.buyerCount(q.c, q.query, q.args...); err != nil || n != q.want {
++				t.Fatalf("%s: n=%d err=%v want %d", q.query, n, err, q.want)
++			}
++			if lcOwner(t, f, r.BundleID) != owner1.Scope.OwnerID || !bytesEqual(lcLinkState(t, f, r.BundleID).hash, hash) {
++				t.Fatalf("%s changed the binding or the token hash", q.query)
++			}
++		}
++		for _, q := range []string{`SELECT count(*) FROM claims.preview_link($1)`, `SELECT count(*) FROM claims.redeem_link($1,1)`} {
++			err := h.directMerchant(h.token, f.storeA1, func(tx pgx.Tx, _ platform.Scope) error { var n int; return tx.QueryRow(h.ctx, q, hash).Scan(&n) })
++			requirePGCode(t, err, "42501", "runtime "+q)
++		}
++		err = buyer.WithScope(h.ctx, h.a.runtime, owner1.Token, f.storeA1, func(ctx context.Context, tx pgx.Tx, _ buyer.Scope) error {
++			_, e := tx.Exec(ctx, `SELECT * FROM claims.issue_link($1,$2,$3,$4,1,$5,true)`, tokenHash(h.token), f.storeA1, s, r.BundleID, randomBytes(32))
++			return e
++		})
++		requirePGCode(t, err, "42501", "buyer issue_link")
++		issue := func(generation int64, release bool) ([]byte, bool) {
++			t.Helper()
++			next := randomBytes(32)
++			var gen int64
++			var released bool
++			err := h.directMerchant(h.token, f.storeA1, func(tx pgx.Tx, _ platform.Scope) error {
++				return tx.QueryRow(h.ctx, `SELECT generation,released FROM claims.issue_link($1,$2,$3,$4,$5,$6,$7)`, tokenHash(h.token), f.storeA1, s, r.BundleID, generation, next, release).Scan(&gen, &released)
++			})
++			if err != nil || gen != generation+1 {
++				t.Fatalf("direct issue_link gen=%d release=%t: %d %v", generation, release, gen, err)
++			}
++			return next, released
++		}
++		rotated, released := issue(1, false)
++		if released || lcOwner(t, f, r.BundleID) != owner1.Scope.OwnerID || !bytesEqual(lcLinkState(t, f, r.BundleID).hash, rotated) {
++			t.Fatal("rotation without release must keep the binding and replace the hash")
++		}
++		releasedHash, released := issue(2, true)
++		if !released || lcOwner(t, f, r.BundleID) != "" || !bytesEqual(lcLinkState(t, f, r.BundleID).hash, releasedHash) || bytesEqual(releasedHash, rotated) {
++			t.Fatal("release must clear the binding and replace the hash in the same call")
++		}
++		if n := countRows(t, f.owner, `SELECT count(*) FROM claims.lines WHERE bundle_id=$1 AND applied_version IS NOT NULL`, r.BundleID); n != 0 {
++			t.Fatalf("release must reset applied state, %d lines still applied", n)
++		}
++	})
++
++	t.Run("pool-validator", func(t *testing.T) {
++		login := func(inRoles string, extra string) string {
++			role := "lc_reach_" + hex.EncodeToString(randomBytes(5))
++			password := hex.EncodeToString(randomBytes(24))
++			mustExec(t, f.owner, fmt.Sprintf(`CREATE ROLE %s LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION IN ROLE %s PASSWORD '%s'`, role, inRoles, password))
++			if extra != "" {
++				mustExec(t, f.owner, fmt.Sprintf(extra, role))
++			}
++			t.Cleanup(func() { mustExec(t, f.owner, `DROP ROLE `+role) })
++			return roleURL(t, f.databaseURL, role, password)
++		}
++		pool, err := platform.OpenPool(ctx, login("commerce_runtime", ""))
++		if err != nil {
++			t.Fatalf("positive control: plain runtime login rejected: %v", err)
++		}
++		pool.Close()
++		assertPoolRejected(t, "runtime+claims writer", platform.OpenPool, login("commerce_runtime,commerce_claims_writer", ""))
++		assertPoolRejected(t, "runtime SET claims writer", platform.OpenPool, login("commerce_runtime", "GRANT commerce_claims_writer TO %s WITH INHERIT FALSE, SET TRUE"))
++		assertPoolRejected(t, "buyer+claims writer", platform.OpenBuyerPool, login("commerce_buyer_runtime,commerce_claims_writer", ""))
++		assertPoolRejected(t, "buyer SET claims writer", platform.OpenBuyerPool, login("commerce_buyer_runtime", "GRANT commerce_claims_writer TO %s WITH INHERIT FALSE, SET TRUE"))
++	})
++
++	t.Run("populated-pre-0060-upgrade", func(t *testing.T) {
++		lcPopulatedUpgrade(t)
++	})
++}
++
++func bytesEqual(a, b []byte) bool { return hex.EncodeToString(a) == hex.EncodeToString(b) }
++
++// lcPopulatedUpgrade starts a separate labelled PG (pinned image, never pulled), applies
++// every migration except 0060 through the real runner (0060 is pre-registered in the
++// ledger with its true checksum, then un-registered), populates live/catalog/identity
++// rows, and then applies 0060 twice on top of that data.
++func lcPopulatedUpgrade(t *testing.T) {
++	fixture(t) // same explicit disposable-PG consent gate as every foundation test
++	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
++	defer cancel()
++	name := "lc-claims-upgrade-" + t04Tag()
++	password := hex.EncodeToString(randomBytes(24))
++	if out, err := exec.CommandContext(ctx, "docker", "run", "-d", "--pull=never", "--name", name, "--label", "livecommerce.fixture="+name,
++		"--memory=512m", "--cpus=1", "--pids-limit=128", "--tmpfs", "/var/lib/postgresql:rw,size=268435456", "-e", "POSTGRES_PASSWORD="+password,
++		"-e", "POSTGRES_DB=lc_foundation_test", "-p", "127.0.0.1::5432", "postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280",
++		"-c", "shared_buffers=32MB", "-c", "max_connections=30").CombinedOutput(); err != nil {
++		t.Fatalf("start labelled upgrade PG: %v %s", err, out)
++	}
++	t.Cleanup(func() {
++		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
++		defer stop()
++		label, err := exec.CommandContext(cleanup, "docker", "inspect", "-f", `{{index .Config.Labels "livecommerce.fixture"}}`, name).Output()
++		if err != nil || strings.TrimSpace(string(label)) != name {
++			t.Errorf("refusing unverified PG cleanup %s: %v", name, err)
++			return
++		}
++		if out, err := exec.CommandContext(cleanup, "docker", "rm", "-f", name).CombinedOutput(); err != nil {
++			t.Errorf("remove upgrade PG %s: %v %s", name, err, out)
++		}
++	})
++	portOut, err := exec.CommandContext(ctx, "docker", "port", name, "5432/tcp").Output()
++	if err != nil || !strings.HasPrefix(strings.TrimSpace(string(portOut)), "127.0.0.1:") {
++		t.Fatal("upgrade PG did not bind loopback")
++	}
++	u := &url.URL{Scheme: "postgres", User: url.UserPassword("postgres", password), Host: strings.TrimSpace(string(portOut)), Path: "/lc_foundation_test", RawQuery: "sslmode=disable"}
++	owner, err := pgxpool.New(ctx, u.String())
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(owner.Close)
++	ready := false
++	for i := 0; i < 100 && !ready; i++ {
++		probe, stop := context.WithTimeout(ctx, 500*time.Millisecond)
++		var one int
++		ready = owner.QueryRow(probe, `SELECT 1`).Scan(&one) == nil
++		stop()
++		if !ready {
++			time.Sleep(200 * time.Millisecond)
++		}
++	}
++	if !ready {
++		t.Fatal("upgrade PG did not become ready")
++	}
++	body, err := os.ReadFile(filepath.Join("../../migrations", "0060_live_claims.sql"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	mustExec(t, owner, `CREATE TABLE public.lc_schema_migrations (version text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`)
++	mustExec(t, owner, `INSERT INTO public.lc_schema_migrations(version,checksum) VALUES('0060_live_claims.sql',$1)`, fmt.Sprintf("%x", sha256.Sum256(body)))
++	if err := migrations.Apply(ctx, owner); err != nil {
++		t.Fatalf("apply everything before 0060: %v", err)
++	}
++	if n := countRows(t, owner, `SELECT count(*) FROM pg_namespace WHERE nspname='claims'`) + countRows(t, owner, `SELECT count(*) FROM pg_class WHERE oid=to_regclass('live.offers')`); n != 0 {
++		t.Fatal("pre-0060 database already has claims objects")
++	}
++	tenant, store, principal, session, product, sku := randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID(), randomUUID()
++	for _, q := range []struct {
++		sql  string
++		args []any
++	}{
++		{`INSERT INTO control.tenants(id,name) VALUES($1,'upgrade-tenant')`, []any{tenant}},
++		{`INSERT INTO control.stores(tenant_id,id,name,currency) VALUES($1,$2,'upgrade-store','USD')`, []any{tenant, store}},
++		{`INSERT INTO identity.principals(id) VALUES($1)`, []any{principal}},
++		{`INSERT INTO identity.memberships(tenant_id,principal_id) VALUES($1,$2)`, []any{tenant, principal}},
++		{`INSERT INTO identity.store_grants(tenant_id,store_id,principal_id,permission) VALUES($1,$2,$3,'live:manage')`, []any{tenant, store, principal}},
++		{`INSERT INTO live.sessions(id,tenant_id,store_id,principal_id,title) VALUES($1,$2,$3,$4,'pre-0060 session')`, []any{session, tenant, store, principal}},
++		{`INSERT INTO live.programs(tenant_id,store_id,session_id,principal_id,aspect_ratio) VALUES($1,$2,$3,$4,'9:16')`, []any{tenant, store, session, principal}},
++		{`INSERT INTO catalog.products(tenant_id,store_id,id,name) VALUES($1,$2,$3,'pre-0060 product')`, []any{tenant, store, product}},
++		{`INSERT INTO catalog.skus(tenant_id,store_id,id,product_id,code,currency,price_minor) VALUES($1,$2,$3,$4,'PRE-0060','USD',100)`, []any{tenant, store, sku, product}},
++	} {
++		mustExec(t, owner, q.sql, q.args...)
++	}
++	before := map[string]int{}
++	for _, table := range []string{"live.sessions", "live.programs", "catalog.skus", "identity.store_grants"} {
++		before[table] = countRows(t, owner, `SELECT count(*) FROM `+table)
++	}
++	mustExec(t, owner, `DELETE FROM public.lc_schema_migrations WHERE version='0060_live_claims.sql'`)
++	for i := 0; i < 2; i++ {
++		if err := migrations.Apply(ctx, owner); err != nil {
++			t.Fatalf("0060 upgrade apply %d on populated data: %v", i+1, err)
++		}
++	}
++	if n := countRows(t, owner, `SELECT count(*) FROM public.lc_schema_migrations WHERE version='0060_live_claims.sql' AND checksum=$1`, fmt.Sprintf("%x", sha256.Sum256(body))); n != 1 {
++		t.Fatalf("0060 ledger rows after upgrade=%d", n)
++	}
++	for table, n := range before {
++		if got := countRows(t, owner, `SELECT count(*) FROM `+table); got != n {
++			t.Fatalf("upgrade changed %s rows %d -> %d", table, n, got)
++		}
++	}
++	var title string
++	if err := owner.QueryRow(ctx, `SELECT title FROM live.sessions WHERE id=$1`, session).Scan(&title); err != nil || title != "pre-0060 session" {
++		t.Fatalf("pre-existing session changed: %q %v", title, err)
++	}
++	for _, table := range lcTables {
++		var force bool
++		if err := owner.QueryRow(ctx, `SELECT relforcerowsecurity FROM pg_class WHERE oid=$1::regclass`, table).Scan(&force); err != nil || !force {
++			t.Fatalf("upgraded %s FORCE RLS=%t %v", table, force, err)
++		}
++		if n := countRows(t, owner, `SELECT count(*) FROM `+table); n != 0 {
++			t.Fatalf("upgrade backfilled %d rows into %s", n, table)
++		}
++	}
++	if n := countRows(t, owner, `SELECT count(*) FROM identity.store_grants WHERE permission LIKE 'live:%'`); n != 1 {
++		t.Fatalf("upgrade changed live grants (no backfill, §3): %d", n)
++	}
++	// New claim configuration can reference the pre-existing session and SKU.
++	mustExec(t, owner, `INSERT INTO live.claim_windows(tenant_id,store_id,session_id,state,match_mode,generation,principal_id) VALUES($1,$2,$3,'CLOSED','EXACT',0,$4)`, tenant, store, session, principal)
++	mustExec(t, owner, `INSERT INTO live.offers(tenant_id,store_id,session_id,keyword,sku_id,max_quantity_per_claim,principal_id) VALUES($1,$2,$3,'A1',$4,3,$5)`, tenant, store, session, sku, principal)
++}
++
++// TestLiveClaimsKC12Isolation is KC12 (§3.2 RLS/grants, §3.3 guards, 2 tenants x 2 stores).
++func TestLiveClaimsKC12Isolation(t *testing.T) {
++	h := lcSetup(t)
++	f, ctx := h.f, h.ctx
++	storeB2 := randomUUID()
++	mustExec(t, f.owner, `INSERT INTO control.stores(tenant_id,id,name,currency) VALUES($1,$2,'claims-isolation-b2','TWD')`, f.tenantB, storeB2)
++	principalB, tokenB := lcPrincipal(t, f, f.tenantB, []string{f.storeB, storeB2}, "store:read", "live:read", "live:manage")
++	t.Cleanup(func() {
++		mustExec(t, f.owner, `UPDATE live.claim_windows w SET state='CLOSED',closed_at=clock_timestamp(),version=w.version+1
++			WHERE w.state='OPEN' AND w.session_id IN (SELECT id FROM live.sessions WHERE principal_id=$1)`, principalB)
++	})
++	type claimData struct {
++		store, session, bundle, offer string
++		version                       int64
++		token                         claims.LinkToken
++	}
++	setup := func(token, tenant, store, currency string) claimData {
++		t.Helper()
++		session := h.draftAs(t, token, store)
++		sku := lcSKUs(t, f, tenant, store, currency, 1)[0]
++		w, err := h.setWindow(token, store, session, claims.WindowInput{State: claims.WindowOpen, MatchMode: claims.MatchExact})
++		if err != nil || w.State != claims.WindowOpen {
++			t.Fatalf("open %s: %v", store, err)
++		}
++		o, err := h.createOffer(token, store, t04Key("lc-offer"), session, claims.OfferInput{Keyword: "A1", SKUID: sku, MaxQuantityPerClaim: 5})
++		if err != nil {
++			t.Fatal(err)
++		}
++		r, err := h.manual(token, store, t04Key("lc-manual"), session, claims.ManualClaimInput{ActorLabel: "iso", Text: "A1+2"})
++		if err != nil || r.Outcome != claims.OutcomeAccepted {
++			t.Fatalf("claim in %s: %+v %v", store, r, err)
++		}
++		l, err := h.issue(token, store, t04Key("lc-link"), session, r.BundleID, claims.LinkInput{})
++		if err != nil {
++			t.Fatal(err)
++		}
++		return claimData{store: store, session: session, bundle: r.BundleID, offer: o.ID, version: r.BundleVersion, token: l.Token}
++	}
++	a1 := setup(h.token, f.tenantA, f.storeA1, "USD")
++	a2 := setup(h.token, f.tenantA, f.storeA2, "USD")
++	b := setup(tokenB, f.tenantB, f.storeB, "TWD")
++	caps := map[string]buyer.Capability{f.storeA1: h.cap, f.storeA2: mustIssue(t, h.service, f.storeA2), f.storeB: mustIssue(t, h.service, f.storeB), storeB2: mustIssue(t, h.service, storeB2)}
++	links := lcDigest(t, f, "claims")
++
++	// Buyers of every other store (same tenant, other tenant, empty store) get the uniform not-found.
++	for _, d := range []claimData{a1, a2, b} {
++		for store, c := range caps {
++			if store == d.store {
++				continue
++			}
++			if _, err := h.preview(c, d.token); !errors.Is(err, command.ErrNotFound) {
++				t.Fatalf("preview of %s link from %s: %v", d.store, store, err)
++			}
++			if _, err := h.redeem(c, t04Key("lc-redeem"), d.token, d.version); !errors.Is(err, command.ErrNotFound) {
++				t.Fatalf("redeem of %s link from %s: %v", d.store, store, err)
++			}
++		}
++	}
++	lcSameDigest(t, "cross-store buyer attempts", links, lcDigest(t, f, "claims"))
++
++	// Forged buyer GUCs + a foreign token hash: zero rows, or 22023 for malformed context.
++	buyerForged := func(c buyer.Capability, forge []string, query string, args ...any) (int, error) {
++		n := 0
++		err := buyer.WithScope(ctx, h.a.runtime, c.Token, c.Scope.StoreID, func(ctx context.Context, tx pgx.Tx, _ buyer.Scope) error {
++			for i := 0; i+1 < len(forge); i += 2 {
++				if _, err := tx.Exec(ctx, `SELECT set_config($1,$2,true)`, forge[i], forge[i+1]); err != nil {
++					return err
++				}
++			}
++			return tx.QueryRow(ctx, query, args...).Scan(&n)
++		})
++		return n, err
++	}
++	hashA1 := tokenHash(string(a1.token))
++	for _, tc := range []struct {
++		name  string
++		c     buyer.Capability
++		forge []string
++	}{
++		{"A2 buyer", caps[f.storeA2], nil}, {"B buyer", caps[f.storeB], nil},
++		{"A1 buyer with tenant B", h.cap, []string{"app.tenant_id", f.tenantB}},
++		{"A1 buyer with store A2", h.cap, []string{"app.store_id", f.storeA2}},
++		{"B buyer with tenant A", caps[f.storeB], []string{"app.tenant_id", f.tenantA}},
++	} {
++		for _, q := range []string{`SELECT count(*) FROM claims.preview_link($1)`, `SELECT count(*) FROM claims.redeem_link($1,` + strconv.FormatInt(a1.version, 10) + `)`} {
++			if n, err := buyerForged(tc.c, tc.forge, q, hashA1); err != nil || n != 0 {
++				t.Fatalf("%s %s: rows=%d err=%v", tc.name, q, n, err)
++			}
++		}
++	}
++	for _, tc := range []struct {
++		name  string
++		forge []string
++		query string
++		args  []any
++	}{
++		{"principal set", []string{"app.principal_id", h.actor}, `SELECT count(*) FROM claims.preview_link($1)`, []any{hashA1}},
++		{"buyer empty", []string{"app.buyer_id", ""}, `SELECT count(*) FROM claims.preview_link($1)`, []any{hashA1}},
++		{"buyer malformed", []string{"app.buyer_id", "not-a-uuid"}, `SELECT count(*) FROM claims.redeem_link($1,1)`, []any{hashA1}},
++		{"session empty", []string{"app.buyer_session_id", ""}, `SELECT count(*) FROM claims.preview_link($1)`, []any{hashA1}},
++		{"tenant upper", []string{"app.tenant_id", strings.ToUpper(f.tenantA)}, `SELECT count(*) FROM claims.preview_link($1)`, []any{hashA1}},
++		{"store empty", []string{"app.store_id", ""}, `SELECT claims.mark_applied($1,ARRAY[$2]::uuid[],ARRAY[1]::bigint[])`, []any{a1.bundle, a1.offer}},
++		{"short hash", nil, `SELECT count(*) FROM claims.preview_link($1)`, []any{randomBytes(31)}},
++		{"null hash", nil, `SELECT count(*) FROM claims.redeem_link(NULL,1)`, nil},
++		{"null version", nil, `SELECT count(*) FROM claims.redeem_link($1,NULL)`, []any{hashA1}},
++		{"empty arrays", nil, `SELECT claims.mark_applied($1,ARRAY[]::uuid[],ARRAY[]::bigint[])`, []any{a1.bundle}},
++		{"unequal arrays", nil, `SELECT claims.mark_applied($1,ARRAY[$2]::uuid[],ARRAY[1,2]::bigint[])`, []any{a1.bundle, a1.offer}},
++		{"duplicate offers", nil, `SELECT claims.mark_applied($1,ARRAY[$2,$2]::uuid[],ARRAY[1,1]::bigint[])`, []any{a1.bundle, a1.offer}},
++		{"51 lines", nil, `SELECT claims.mark_applied($1,array_fill($2::uuid,ARRAY[51]),array_fill(1::bigint,ARRAY[51]))`, []any{a1.bundle, a1.offer}},
++	} {
++		_, err := buyerForged(h.cap, tc.forge, tc.query, tc.args...)
++		requirePGCode(t, err, "22023", "buyer guard "+tc.name)
++	}
++	for _, tc := range []struct {
++		name   string
++		c      buyer.Capability
++		bundle string
++		offer  string
++	}{{"foreign-store bundle", h.cap, a2.bundle, a2.offer}, {"unbound own-store bundle", h.cap, a1.bundle, a1.offer}} {
++		_, err := buyerForged(tc.c, nil, `SELECT claims.mark_applied($1,ARRAY[$2]::uuid[],ARRAY[1]::bigint[])`, tc.bundle, tc.offer)
++		requirePGCode(t, err, "PT409", "mark_applied "+tc.name)
++	}
++	rr, err := f.owner.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, q := range []string{`SELECT set_config('app.tenant_id',$1,true)`, `SELECT set_config('app.store_id',$2,true)`, `SELECT set_config('app.buyer_id',$3,true)`,
++		`SELECT set_config('app.buyer_session_id',$4,true)`, `SELECT set_config('app.principal_id','',true)`} {
++		if _, err := rr.Exec(ctx, q, f.tenantA, f.storeA1, h.cap.Scope.OwnerID, h.cap.Scope.SessionID); err != nil {
++			t.Fatal(err)
++		}
++	}
++	_, err = rr.Exec(ctx, `SET LOCAL ROLE commerce_buyer_runtime`)
++	if err == nil {
++		_, err = rr.Exec(ctx, `SELECT count(*) FROM claims.preview_link($1)`, hashA1)
++	}
++	_ = rr.Rollback(ctx)
++	requirePGCode(t, err, "22023", "REPEATABLE READ buyer definer")
++	lcSameDigest(t, "forged buyer contexts", links, lcDigest(t, f, "claims"))
++
++	// Merchants: another store's scope (legitimate or forged GUC) sees nothing of A1.
++	countA1 := func(tx pgx.Tx) (int, error) {
++		var n int
++		err := tx.QueryRow(ctx, `SELECT (SELECT count(*) FROM live.offers WHERE session_id=$1)+(SELECT count(*) FROM live.claim_windows WHERE session_id=$1)
++			+(SELECT count(*) FROM claims.bundles WHERE session_id=$1)+(SELECT count(*) FROM claims.lines WHERE session_id=$1)
++			+(SELECT count(*) FROM claims.events WHERE session_id=$1)+(SELECT count(*) FROM claims.links WHERE bundle_id=$2)`, a1.session, a1.bundle).Scan(&n)
++		return n, err
++	}
++	if err := h.do(h.token, f.storeA1, func(tx pgx.Tx, _ platform.Scope) error {
++		n, err := countA1(tx)
++		if err == nil && n != 6 {
++			err = fmt.Errorf("positive control saw %d A1 rows", n)
++		}
++		return err
++	}); err != nil {
++		t.Fatal(err)
++	}
++	for _, tc := range []struct {
++		name, token, store string
++		forge              []string
++	}{
++		{"A2 merchant", h.token, f.storeA2, nil}, {"B merchant", tokenB, f.storeB, nil}, {"B2 merchant", tokenB, storeB2, nil},
++		{"A1 merchant forging store B", h.token, f.storeA1, []string{"app.store_id", f.storeB}},
++		{"A1 merchant forging tenant B", h.token, f.storeA1, []string{"app.tenant_id", f.tenantB}},
++	} {
++		if err := h.do(tc.token, tc.store, func(tx pgx.Tx, _ platform.Scope) error {
++			for i := 0; i+1 < len(tc.forge); i += 2 {
++				if _, err := tx.Exec(ctx, `SELECT set_config($1,$2,true)`, tc.forge[i], tc.forge[i+1]); err != nil {
++					return err
++				}
++			}
++			n, err := countA1(tx)
++			if err == nil && n != 0 {
++				err = fmt.Errorf("saw %d A1 rows", n)
++			}
++			return err
++		}); err != nil {
++			t.Fatalf("%s: %v", tc.name, err)
++		}
++	}
++	for _, tc := range []struct {
++		name, token, store string
++	}{{"A2", h.token, f.storeA2}, {"B", tokenB, f.storeB}} {
++		lcIs(t, lcErr(h.getBoard(tc.token, tc.store, a1.session)), command.ErrNotFound, tc.name+" GetBoard")
++		lcIs(t, lcErr(h.bundles(tc.token, tc.store, a1.session, pagination.Request{})), command.ErrNotFound, tc.name+" ListBundles")
++		lcIs(t, lcErr(h.setWindow(tc.token, tc.store, a1.session, claims.WindowInput{ExpectedVersion: 1, State: claims.WindowClosed, MatchMode: claims.MatchExact})), command.ErrNotFound, tc.name+" SetWindow")
++		lcIs(t, lcErr(h.createOffer(tc.token, tc.store, t04Key("lc-offer"), a1.session, claims.OfferInput{Keyword: "Z1", SKUID: h.stock.skus[1].ID, MaxQuantityPerClaim: 1})), command.ErrNotFound, tc.name+" CreateOffer")
++		lcIs(t, lcErr(h.updateOffer(tc.token, tc.store, t04Key("lc-offer"), a1.session, a1.offer, claims.OfferUpdate{ExpectedVersion: 1, MaxQuantityPerClaim: 1, Active: true})), command.ErrNotFound, tc.name+" UpdateOffer")
++		lcIs(t, lcErr(h.manual(tc.token, tc.store, t04Key("lc-manual"), a1.session, claims.ManualClaimInput{BundleID: a1.bundle, Text: "A1"})), command.ErrNotFound, tc.name+" RecordManualClaim")
++		lcIs(t, lcErr(h.issue(tc.token, tc.store, t04Key("lc-link"), a1.session, a1.bundle, claims.LinkInput{ExpectedGeneration: 1})), command.ErrNotFound, tc.name+" IssueLink")
++	}
++	// The merchant runtime can neither read credentials/bindings nor write them (42501).
++	for _, q := range []string{
++		`SELECT token_hash FROM claims.links`, `SELECT principal_id FROM claims.links`, `SELECT * FROM claims.links`, `SELECT owner_id FROM claims.bundles`, `SELECT * FROM claims.bundles`,
++		`UPDATE claims.bundles SET owner_id=NULL`, `UPDATE claims.bundles SET bound_at=NULL`, `UPDATE claims.lines SET applied_version=NULL`,
++		`INSERT INTO claims.links(tenant_id,store_id,bundle_id,token_hash,generation,issued_at,expires_at,principal_id) SELECT tenant_id,store_id,id,'\x00'::bytea,1,now(),now(),'` + h.actor + `' FROM claims.bundles`,
++		`UPDATE claims.links SET generation=generation`, `DELETE FROM claims.links`, `DELETE FROM claims.bundles`, `DELETE FROM claims.lines`, `DELETE FROM claims.events`,
++		`UPDATE claims.events SET quantity=quantity`, `UPDATE claims.bundles SET label=label`, `UPDATE claims.bundles SET actor_key=actor_key`, `UPDATE claims.lines SET offer_id=offer_id`,
++		`TRUNCATE claims.events`, `DELETE FROM live.claim_windows`,
++	} {
++		err := h.do(h.token, f.storeA1, func(tx pgx.Tx, _ platform.Scope) error { _, e := tx.Exec(ctx, q); return e })
++		requirePGCode(t, err, "42501", "runtime "+q)
++	}
++
++	// claims.issue_link decides authority in the database: live:read-only principal,
++	// foreign p_store, forged GUCs -> PT403/PT404/22023 and nothing written.
++	_, readerToken := lcPrincipal(t, f, f.tenantA, []string{f.storeA1}, "store:read", "live:read")
++	peer, _ := lcPrincipal(t, f, f.tenantA, []string{f.storeA1}, "store:read", "live:read", "live:manage")
++	before := lcLinkState(t, f, a1.bundle)
++	for _, tc := range []struct {
++		name, want, token, store, pStore string
++		forge                            []string
++	}{
++		{"live:read only", "PT403", readerToken, f.storeA1, f.storeA1, nil},
++		{"foreign p_store (other tenant)", "PT404", h.token, f.storeA1, f.storeB, nil},
++		{"p_store differs from GUC store", "PT403", h.token, f.storeA1, f.storeA2, nil},
++		{"forged principal GUC", "PT403", h.token, f.storeA1, f.storeA1, []string{"app.principal_id", peer}},
++		{"forged revision GUC", "PT403", h.token, f.storeA1, f.storeA1, []string{"app.authz_revision", "999"}},
++		{"buyer GUC present", "22023", h.token, f.storeA1, f.storeA1, []string{"app.buyer_id", h.cap.Scope.OwnerID}},
++		{"revision unset", "22023", h.token, f.storeA1, f.storeA1, []string{"app.authz_revision", ""}},
++	} {
++		err := h.directMerchant(tc.token, tc.store, func(tx pgx.Tx, _ platform.Scope) error {
++			for i := 0; i+1 < len(tc.forge); i += 2 {
++				if _, err := tx.Exec(ctx, `SELECT set_config($1,$2,true)`, tc.forge[i], tc.forge[i+1]); err != nil {
++					return err
++				}
++			}
++			_, err := tx.Exec(ctx, `SELECT * FROM claims.issue_link($1,$2,$3,$4,1,$5,true)`, tokenHash(tc.token), tc.pStore, a1.session, a1.bundle, randomBytes(32))
++			return err
++		})
++		requirePGCode(t, err, tc.want, "issue_link "+tc.name)
++	}
++	if after := lcLinkState(t, f, a1.bundle); after.generation != before.generation || !bytesEqual(after.hash, before.hash) {
++		t.Fatal("refused issue_link calls changed the link")
++	}
++	lcIs(t, lcErr(h.issue(readerToken, f.storeA1, t04Key("lc-link"), a1.session, a1.bundle, claims.LinkInput{ExpectedGeneration: 1})), platform.ErrForbidden, "IssueLink live:read only")
++
++	// Every policy evaluated as every role/context raises no 42P17 (no recursive policy).
++	contexts := map[string][]string{
++		"merchant": {"app.tenant_id", f.tenantA, "app.store_id", f.storeA1, "app.principal_id", h.actor, "app.buyer_id", ""},
++		"buyer":    {"app.tenant_id", f.tenantA, "app.store_id", f.storeA1, "app.principal_id", "", "app.buyer_id", h.cap.Scope.OwnerID, "app.buyer_session_id", h.cap.Scope.SessionID},
++		"mixed":    {"app.tenant_id", f.tenantA, "app.store_id", f.storeA1, "app.principal_id", h.actor, "app.buyer_id", h.cap.Scope.OwnerID},
++	}
++	statements := []string{
++		`SELECT count(*) FROM (SELECT tenant_id,bundle_id,generation,expires_at FROM claims.links) x`,
++		`SELECT count(*) FROM (SELECT id,session_id,bound_at,version FROM claims.bundles) x`,
++		`SELECT count(*) FROM (SELECT bundle_id,offer_id,quantity,version,applied_version FROM claims.lines) x`,
++		`SELECT count(*) FROM (SELECT id,session_id,keyword,active FROM live.offers) x`,
++		`SELECT count(*) FROM claims.events`, `SELECT count(*) FROM live.claim_windows`,
++		`UPDATE claims.bundles SET bound_at=bound_at WHERE session_id='` + a1.session + `'`,
++		`UPDATE claims.lines SET applied_version=applied_version WHERE session_id='` + a1.session + `'`,
++		`UPDATE claims.links SET generation=generation WHERE bundle_id='` + a1.bundle + `'`,
++		`UPDATE live.offers SET version=version WHERE session_id='` + a1.session + `'`,
++		`SELECT count(*) FROM claims.preview_link('\x` + hex.EncodeToString(hashA1) + `'::bytea)`,
++	}
++	for _, role := range []string{"commerce_runtime", "commerce_claims_writer", "commerce_buyer_runtime"} {
++		for name, gucs := range contexts {
++			for _, q := range statements {
++				tx, err := f.owner.Begin(ctx)
++				if err != nil {
++					t.Fatal(err)
++				}
++				for i := 0; i+1 < len(gucs); i += 2 {
++					if _, err := tx.Exec(ctx, `SELECT set_config($1,$2,true)`, gucs[i], gucs[i+1]); err != nil {
++						t.Fatal(err)
++					}
++				}
++				_, err = tx.Exec(ctx, `SET LOCAL ROLE `+role)
++				if err == nil {
++					_, err = tx.Exec(ctx, q)
++				}
++				_ = tx.Rollback(ctx)
++				if sqlState(err) == "42P17" {
++					t.Fatalf("%s/%s %q raised 42P17 (recursive policy)", role, name, q)
++				}
++			}
++		}
++	}
++	lcSameDigest(t, "isolation probes", links, lcDigest(t, f, "claims"))
++}
++
++// TestLiveClaimsP2aPolicyContexts closes §0.1 P2(a): permissive UPDATE policies are
++// OR-ed, so the writer's bind/release/rotate policies must each pin their own context. A
++// buyer transaction cannot release or rotate; a merchant transaction cannot bind; a mixed
++// context can do neither. The probes run as commerce_claims_writer directly (as if a
++// definer body were buggy), inside rolled-back transactions.
++func TestLiveClaimsP2aPolicyContexts(t *testing.T) {
++	h := lcSetup(t)
++	f, ctx := h.f, h.ctx
++	s, _, bound, l := h.claimSetup(t, "p2a-bound")
++	if _, err := h.redeem(h.cap, t04Key("lc-redeem"), l.Token, bound.BundleVersion); err != nil {
++		t.Fatal(err)
++	}
++	unbound := h.accepted(t, s, "", "p2a-unbound", "A1")
++	owner2 := mustIssue(t, h.service, f.storeA1)
++	buyerCtx := []string{"app.tenant_id", f.tenantA, "app.store_id", f.storeA1, "app.principal_id", "", "app.buyer_id", h.cap.Scope.OwnerID, "app.buyer_session_id", h.cap.Scope.SessionID}
++	merchantCtx := []string{"app.tenant_id", f.tenantA, "app.store_id", f.storeA1, "app.principal_id", h.actor, "app.buyer_id", ""}
++	mixedCtx := []string{"app.tenant_id", f.tenantA, "app.store_id", f.storeA1, "app.principal_id", h.actor, "app.buyer_id", h.cap.Scope.OwnerID}
++	asWriter := func(gucs []string, q string, args ...any) (int64, error) {
++		tx, err := f.owner.Begin(ctx)
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer tx.Rollback(ctx)
++		for i := 0; i+1 < len(gucs); i += 2 {
++			if _, err := tx.Exec(ctx, `SELECT set_config($1,$2,true)`, gucs[i], gucs[i+1]); err != nil {
++				t.Fatal(err)
++			}
++		}
++		if _, err := tx.Exec(ctx, `SET LOCAL ROLE commerce_claims_writer`); err != nil {
++			t.Fatal(err)
++		}
++		tag, err := tx.Exec(ctx, q, args...)
++		return tag.RowsAffected(), err
++	}
++	release := `UPDATE claims.bundles SET owner_id=NULL,bound_at=NULL WHERE id=$1`
++	bind := `UPDATE claims.bundles SET owner_id=$2,bound_at=clock_timestamp() WHERE id=$1`
++	rotate := `UPDATE claims.links SET token_hash=$2 WHERE bundle_id=$1`
++	issue := `INSERT INTO claims.links(tenant_id,store_id,bundle_id,token_hash,generation,issued_at,expires_at,principal_id) SELECT $2,$3,$1,$4,1,v,v+interval '1 hour',$5 FROM (SELECT clock_timestamp() v) x`
++	denied := func(label string, n int64, err error) {
++		t.Helper()
++		if err == nil && n != 0 {
++			t.Fatalf("%s: %d rows changed", label, n)
++		}
++		if err != nil && sqlState(err) != "42501" {
++			t.Fatalf("%s: sqlstate %s (%v), want 0 rows or 42501", label, sqlState(err), err)
++		}
++	}
++	// Positive controls: each policy works in its own context.
++	if n, err := asWriter(buyerCtx, bind, unbound.BundleID, h.cap.Scope.OwnerID); err != nil || n != 1 {
++		t.Fatalf("control: buyer binds an unbound bundle: %d %v", n, err)
++	}
++	if n, err := asWriter(merchantCtx, release, bound.BundleID); err != nil || n != 1 {
++		t.Fatalf("control: merchant releases: %d %v", n, err)
++	}
++	if n, err := asWriter(merchantCtx, rotate, bound.BundleID, randomBytes(32)); err != nil || n != 1 {
++		t.Fatalf("control: merchant rotates: %d %v", n, err)
++	}
++	// A buyer transaction can neither release nor rotate nor issue.
++	n, err := asWriter(buyerCtx, release, bound.BundleID)
++	denied("buyer releases its own binding", n, err)
++	n, err = asWriter(buyerCtx, rotate, bound.BundleID, randomBytes(32))
++	denied("buyer rotates", n, err)
++	n, err = asWriter(buyerCtx, issue, unbound.BundleID, f.tenantA, f.storeA1, randomBytes(32), h.actor)
++	denied("buyer issues a link", n, err)
++	n, err = asWriter(buyerCtx, bind, bound.BundleID, owner2.Scope.OwnerID)
++	denied("buyer re-binds to another owner", n, err)
++	// A merchant transaction cannot bind (nor re-bind) any bundle.
++	n, err = asWriter(merchantCtx, bind, unbound.BundleID, owner2.Scope.OwnerID)
++	denied("merchant binds an unbound bundle", n, err)
++	n, err = asWriter(merchantCtx, bind, bound.BundleID, owner2.Scope.OwnerID)
++	denied("merchant re-binds a bound bundle", n, err)
++	// A mixed context satisfies neither side.
++	for label, q := range map[string][]any{"mixed bind": {bind, unbound.BundleID, h.cap.Scope.OwnerID}, "mixed release": {release, bound.BundleID}, "mixed rotate": {rotate, bound.BundleID, randomBytes(32)}} {
++		n, err = asWriter(mixedCtx, q[0].(string), q[1:]...)
++		denied(label, n, err)
++	}
++	if lcOwner(t, f, bound.BundleID) != h.cap.Scope.OwnerID || lcOwner(t, f, unbound.BundleID) != "" {
++		t.Fatal("rolled-back probes changed a binding")
++	}
++}
++
++// TestLiveClaimsP2gLinkTTLInDatabase closes §0.1 P2(g): the 72 h TTL and expiry are
++// enforced by the database (CHECK + definer clock), not only in Go.
++func TestLiveClaimsP2gLinkTTLInDatabase(t *testing.T) {
++	h := lcSetup(t)
++	f, ctx := h.f, h.ctx
++	s, _, r, l := h.claimSetup(t, "p2g")
++	row := lcLinkState(t, f, r.BundleID)
++	if !row.found || !row.exactly72 || !row.expires.Equal(l.ExpiresAt) || row.generation != 1 {
++		t.Fatalf("issued link row %+v (IssuedLink.ExpiresAt=%v)", row, l.ExpiresAt)
++	}
++	for label, q := range map[string]string{
++		"TTL above 72h":  `UPDATE claims.links SET expires_at=issued_at+interval '72 hours 1 microsecond' WHERE bundle_id=$1`,
++		"zero TTL":       `UPDATE claims.links SET expires_at=issued_at WHERE bundle_id=$1`,
++		"negative TTL":   `UPDATE claims.links SET expires_at=issued_at-interval '1 second' WHERE bundle_id=$1`,
++		"issued forward": `UPDATE claims.links SET issued_at=expires_at WHERE bundle_id=$1`,
++	} {
++		_, err := f.owner.Exec(ctx, q, r.BundleID)
++		requirePGCode(t, err, "23514", label)
++	}
++	// Move the whole 72 h window so it ends ~1.5 s from now (one clock read keeps the CHECK).
++	var expires time.Time
++	if err := f.owner.QueryRow(ctx, `UPDATE claims.links SET issued_at=x.v,expires_at=x.v+interval '72 hours'
++		FROM (SELECT clock_timestamp()-interval '72 hours'+interval '1500 milliseconds' AS v) x WHERE bundle_id=$1 RETURNING expires_at`, r.BundleID).Scan(&expires); err != nil {
++		t.Fatal(err)
++	}
++	hash := tokenHash(string(l.Token))
++	if p, err := h.preview(h.cap, l.Token); err != nil || !p.ExpiresAt.Equal(expires) {
++		t.Fatalf("preview before expiry: %+v %v", p, err)
++	}
++	if n, err := h.buyerCount(h.cap, `SELECT count(*) FROM claims.preview_link($1)`, hash); err != nil || n != 1 {
++		t.Fatalf("definer before expiry rows=%d %v", n, err)
++	}
++	mustExec(t, f.owner, `SELECT pg_sleep(GREATEST(0,extract(epoch FROM $1::timestamptz-clock_timestamp()))+0.05)`, expires)
++	if n, err := h.buyerCount(h.cap, `SELECT count(*) FROM claims.preview_link($1)`, hash); err != nil || n != 0 {
++		t.Fatalf("definer preview after DB expiry rows=%d %v", n, err)
++	}
++	if n, err := h.buyerCount(h.cap, `SELECT count(*) FROM claims.redeem_link($1,$2)`, hash, r.BundleVersion); err != nil || n != 0 {
++		t.Fatalf("definer redeem after DB expiry rows=%d %v", n, err)
++	}
++	lcIs(t, lcErr(h.preview(h.cap, l.Token)), command.ErrNotFound, "PreviewLink after expiry")
++	lcIs(t, lcErr(h.redeem(h.cap, t04Key("lc-redeem"), l.Token, r.BundleVersion)), command.ErrNotFound, "RedeemLink after expiry")
++	if lcOwner(t, f, r.BundleID) != "" {
++		t.Fatal("expired link bound the bundle")
++	}
++	page, err := h.bundles(h.token, f.storeA1, s, pagination.Request{})
++	if err != nil || len(page.Items) != 1 || page.Items[0].Link.State != "EXPIRED" || page.Items[0].Link.Generation != 1 {
++		t.Fatalf("merchant link state after expiry: %+v %v", page.Items, err)
++	}
++	// Rotation after expiry resets both timestamps from one clock read.
++	next := h.link(t, s, r.BundleID, 1, false)
++	if row := lcLinkState(t, f, r.BundleID); !row.exactly72 || !row.expires.Equal(next.ExpiresAt) || !row.issued.After(expires) {
++		t.Fatalf("rotated link row %+v", row)
++	}
++	if _, err := h.preview(h.cap, next.Token); err != nil {
++		t.Fatalf("rotated token after expiry: %v", err)
++	}
++}
+diff --git a/tests/foundation/live_claims_test.go b/tests/foundation/live_claims_test.go
+new file mode 100644
+index 0000000..7c37e91
+--- /dev/null
++++ b/tests/foundation/live_claims_test.go
+@@ -0,0 +1,1122 @@
++// T10 live keyword claims gates, written by the independent test_worker from
++// contracts/live-keyword-claims-v1.md (FROZEN, with the §0.1 integrator rulings).
++//
++// Owns: the shared claims gate harness (lcHarness and its helpers) and gates KC02
++// (public-API units: normalizers, token/key strictness, redaction), KC04 (offers) and
++// KC05 (claim window). The other gates live beside this file in live_claims_*_test.go:
++// schema/isolation (KC03, KC12, P2a, P2g), ingest/manual (KC06-KC08, P2b-P2e),
++// link/preview/redeem (KC09-KC11, P2f), HTTP (KC13, KC14) and guards (KC15).
++//
++// Non-goals: no provider, Meta or browser coverage (KC16), no grammar-vector gate (KC01
++// lives in internal/claims/grammar), and no expectation derived from internal/claims
++// implementation bodies: every assertion cites a contract section. Tests never weaken a
++// contract rule to pass; a failing assertion is a product finding.
++//
++// Depends on: the foundation fixture chain fixture()->t04Fixture->pricingFixture->cqSetup
++// (real PostgreSQL; commerce_runtime login foundation_api; buyer runtime and issuer
++// logins; USD store A1 with two catalog SKUs and a pricing market), live.CreateDraft for
++// sessions (live:manage), and the owner (superuser) pool only for synthetic setup, fault
++// injection and read-back of columns no runtime role may read (claims.links.token_hash,
++// claims.bundles.owner_id), exactly as the contract's own KC rows describe.
++//
++// Isolation: every test owns fresh principals (live:* grants are explicit; there is no
++// backfill, contract §12), fresh draft sessions and SKUs. The store-wide "one OPEN
++// window" rule (§1) means claims tests run serially (no t.Parallel) and each harness
++// closes its own OPEN windows in t.Cleanup. Evidence label: REAL_PG, MOCK manual ingress.
++package foundation_test
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/base64"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"reflect"
++	"sort"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/jackc/pgx/v5"
++	"github.com/jackc/pgx/v5/pgconn"
++
++	"livecommerce/internal/buyer"
++	"livecommerce/internal/claims"
++	"livecommerce/internal/claims/grammar"
++	"livecommerce/internal/command"
++	"livecommerce/internal/live"
++	"livecommerce/internal/pagination"
++	"livecommerce/internal/platform"
++	"livecommerce/internal/storefront"
++)
++
++// lcHarness is the claims gate harness: cqSetup's store A1 (buyer pools, capability,
++// stock, market) plus one merchant principal holding store:read, live:read and
++// live:manage on stores A1 and A2, and a fresh server-held label key.
++type lcHarness struct {
++	cqHarness
++	ctx          context.Context
++	actor, token string
++	labels       claims.LabelKey
++}
++
++// lcSetup builds the harness. Cleanup closes every OPEN window of sessions this actor
++// created (owner SQL; the store-wide OPEN index would otherwise leak into later tests).
++func lcSetup(t *testing.T) *lcHarness {
++	t.Helper()
++	h := &lcHarness{cqHarness: cqSetup(t), ctx: context.Background()}
++	h.actor, h.token = lcPrincipal(t, h.f, h.f.tenantA, []string{h.f.storeA1, h.f.storeA2}, "store:read", "live:read", "live:manage")
++	var err error
++	if h.labels, err = claims.NewLabelKey(randomBytes(32)); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		mustExec(t, h.f.owner, `UPDATE live.claim_windows w SET state='CLOSED',closed_at=clock_timestamp(),version=w.version+1
++			WHERE w.state='OPEN' AND w.session_id IN (SELECT id FROM live.sessions WHERE principal_id=$1)`, h.actor)
++	})
++	return h
++}
++
++// lcPrincipal creates a merchant principal of tenant with permissions on every store
++// and returns (principal id, merchant bearer token).
++func lcPrincipal(t *testing.T, f *testFixture, tenant string, stores []string, permissions ...string) (string, string) {
++	t.Helper()
++	principal := randomUUID()
++	mustExec(t, f.owner, `INSERT INTO identity.principals(id) VALUES($1)`, principal)
++	mustExec(t, f.owner, `INSERT INTO identity.memberships(tenant_id,principal_id) VALUES($1,$2)`, tenant, principal)
++	for _, store := range stores {
++		mustExec(t, f.owner, `INSERT INTO identity.store_grants(tenant_id,store_id,principal_id,permission)
++			SELECT $1,$2,$3,p FROM unnest($4::text[]) p`, tenant, store, principal, permissions)
++	}
++	return principal, lcToken(t, f, principal)
++}
++
++// lcToken issues one more merchant session for principal (so a test may revoke it).
++func lcToken(t *testing.T, f *testFixture, principal string) string {
++	t.Helper()
++	token := randomToken()
++	tx, err := f.owner.Begin(context.Background())
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tx.Rollback(context.Background())
++	if err = insertSession(context.Background(), tx, token, principal, "merchant", time.Now().Add(time.Hour), nil); err != nil {
++		t.Fatal(err)
++	}
++	if err = tx.Commit(context.Background()); err != nil {
++		t.Fatal(err)
++	}
++	return token
++}
++
++// lcSKUs inserts one active product with n active SKUs (owner SQL, synthetic catalog
++// data only) and returns their ids in creation order.
++func lcSKUs(t *testing.T, f *testFixture, tenant, store, currency string, n int) []string {
++	t.Helper()
++	product, tag := randomUUID(), t04Tag()
++	mustExec(t, f.owner, `INSERT INTO catalog.products(tenant_id,store_id,id,name) VALUES($1,$2,$3,$4)`, tenant, store, product, "claims gate "+tag)
++	mustExec(t, f.owner, `INSERT INTO catalog.skus(tenant_id,store_id,product_id,code,currency,price_minor)
++		SELECT $1,$2,$3,$4||'-'||lpad(g::text,4,'0'),$5,1000+g FROM generate_series(1,$6::int) g`, tenant, store, product, "LC-"+tag, currency, n)
++	rows, err := f.owner.Query(context.Background(), `SELECT id::text FROM catalog.skus WHERE product_id=$1 ORDER BY code`, product)
++	if err != nil {
++		t.Fatal(err)
++	}
++	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
++	if err != nil || len(ids) != n {
++		t.Fatalf("synthetic SKUs: %d %v", len(ids), err)
++	}
++	return ids
++}
++
++func (h *lcHarness) do(token, store string, fn func(pgx.Tx, platform.Scope) error) error {
++	return platform.WithScope(h.ctx, h.f.runtime, token, store, "store:read", fn)
++}
++
++// draft creates a live DRAFT session owned by the harness actor (windows may open on a
++// DRAFT session until T08 defines LIVE, §0.1).
++func (h *lcHarness) draft(t *testing.T, store string) string {
++	t.Helper()
++	return h.draftAs(t, h.token, store)
++}
++
++// draftAs creates a DRAFT session with any merchant token holding live:manage (KC12 uses
++// another tenant's principal).
++func (h *lcHarness) draftAs(t *testing.T, token, store string) string {
++	t.Helper()
++	var d live.Draft
++	err := h.do(token, store, func(tx pgx.Tx, s platform.Scope) (err error) {
++		d, err = live.CreateDraft(h.ctx, tx, s, token, t04Key("lc-draft"), live.DraftInput{Title: "claims gate " + t04Tag(), AspectRatio: "9:16"})
++		return err
++	})
++	if err != nil {
++		t.Fatalf("create draft in %s: %v", store, err)
++	}
++	return d.ID
++}
++
++func (h *lcHarness) setWindow(token, store, session string, in claims.WindowInput) (out claims.Window, err error) {
++	err = h.do(token, store, func(tx pgx.Tx, s platform.Scope) (e error) {
++		out, e = claims.SetWindow(h.ctx, tx, s, token, t04Key("lc-window"), session, in)
++		return e
++	})
++	return out, err
++}
++
++func (h *lcHarness) mustWindow(t *testing.T, session string, version int64, state string, mode claims.MatchMode) claims.Window {
++	t.Helper()
++	w, err := h.setWindow(h.token, h.f.storeA1, session, claims.WindowInput{ExpectedVersion: version, State: state, MatchMode: mode})
++	if err != nil {
++		t.Fatalf("SetWindow %s/%s from v%d: %v", state, mode, version, err)
++	}
++	return w
++}
++
++func (h *lcHarness) getBoard(token, store, session string) (out claims.Board, err error) {
++	err = h.do(token, store, func(tx pgx.Tx, s platform.Scope) (e error) {
++		out, e = claims.GetBoard(h.ctx, tx, s, token, session)
++		return e
++	})
++	return out, err
++}
++
++func (h *lcHarness) board(t *testing.T, session string) claims.Board {
++	t.Helper()
++	b, err := h.getBoard(h.token, h.f.storeA1, session)
++	if err != nil {
++		t.Fatalf("GetBoard: %v", err)
++	}
++	return b
++}
++
++// open moves the store-A1 session's window to OPEN in mode (a mode change goes through
++// CLOSED first: mode changes only while CLOSED, §1 / P2(e)).
++func (h *lcHarness) open(t *testing.T, session string, mode claims.MatchMode) claims.Window {
++	t.Helper()
++	w := h.board(t, session).Window
++	if w.State == claims.WindowOpen {
++		if w.MatchMode == mode {
++			return w
++		}
++		w = h.mustWindow(t, session, w.Version, claims.WindowClosed, w.MatchMode)
++	}
++	if w.Version > 0 && w.MatchMode != mode {
++		w = h.mustWindow(t, session, w.Version, claims.WindowClosed, mode)
++	}
++	return h.mustWindow(t, session, w.Version, claims.WindowOpen, mode)
++}
++
++func (h *lcHarness) closeWindow(t *testing.T, session string) claims.Window {
++	t.Helper()
++	w := h.board(t, session).Window
++	if w.State != claims.WindowOpen {
++		return w
++	}
++	return h.mustWindow(t, session, w.Version, claims.WindowClosed, w.MatchMode)
++}
++
++func (h *lcHarness) createOffer(token, store, key, session string, in claims.OfferInput) (out claims.Offer, err error) {
++	err = h.do(token, store, func(tx pgx.Tx, s platform.Scope) (e error) {
++		out, e = claims.CreateOffer(h.ctx, tx, s, token, key, session, in)
++		return e
++	})
++	return out, err
++}
++
++func (h *lcHarness) offer(t *testing.T, session, keyword, sku string, max int64) claims.Offer {
++	t.Helper()
++	o, err := h.createOffer(h.token, h.f.storeA1, t04Key("lc-offer"), session, claims.OfferInput{Keyword: keyword, SKUID: sku, MaxQuantityPerClaim: max})
++	if err != nil {
++		t.Fatalf("CreateOffer %s: %v", keyword, err)
++	}
++	return o
++}
++
++func (h *lcHarness) updateOffer(token, store, key, session, id string, in claims.OfferUpdate) (out claims.Offer, err error) {
++	err = h.do(token, store, func(tx pgx.Tx, s platform.Scope) (e error) {
++		out, e = claims.UpdateOffer(h.ctx, tx, s, token, key, session, id, in)
++		return e
++	})
++	return out, err
++}
++
++func (h *lcHarness) setOffer(t *testing.T, session string, o claims.Offer, max int64, active bool) claims.Offer {
++	t.Helper()
++	out, err := h.updateOffer(h.token, h.f.storeA1, t04Key("lc-offer-set"), session, o.ID, claims.OfferUpdate{ExpectedVersion: o.Version, MaxQuantityPerClaim: max, Active: active})
++	if err != nil {
++		t.Fatalf("UpdateOffer %s active=%t: %v", o.Keyword, active, err)
++	}
++	return out
++}
++
++func (h *lcHarness) manual(token, store, key, session string, in claims.ManualClaimInput) (out claims.ManualClaimResult, err error) {
++	err = h.do(token, store, func(tx pgx.Tx, s platform.Scope) (e error) {
++		out, e = claims.RecordManualClaim(h.ctx, tx, s, h.labels, token, key, session, in)
++		return e
++	})
++	return out, err
++}
++
++func (h *lcHarness) claim(t *testing.T, session string, in claims.ManualClaimInput) claims.ManualClaimResult {
++	t.Helper()
++	r, err := h.manual(h.token, h.f.storeA1, t04Key("lc-manual"), session, in)
++	if err != nil {
++		t.Fatalf("RecordManualClaim: %v", err)
++	}
++	return r
++}
++
++// accepted records a manual claim that must be ACCEPTED (bundle "" = new actor label).
++func (h *lcHarness) accepted(t *testing.T, session, bundle, label, text string) claims.ManualClaimResult {
++	t.Helper()
++	r := h.claim(t, session, claims.ManualClaimInput{BundleID: bundle, ActorLabel: label, Text: text})
++	if r.Outcome != claims.OutcomeAccepted || !command.ValidID(r.BundleID) {
++		t.Fatalf("manual claim %q not accepted: %+v", text, r)
++	}
++	return r
++}
++
++func (h *lcHarness) issue(token, store, key, session, bundle string, in claims.LinkInput) (out claims.IssuedLink, err error) {
++	err = h.do(token, store, func(tx pgx.Tx, s platform.Scope) (e error) {
++		out, e = claims.IssueLink(h.ctx, tx, s, token, key, session, bundle, in)
++		return e
++	})
++	return out, err
++}
++
++// link issues or rotates a store-A1 link and checks the first-execution token shape (§6).
++func (h *lcHarness) link(t *testing.T, session, bundle string, generation int64, release bool) claims.IssuedLink {
++	t.Helper()
++	l, err := h.issue(h.token, h.f.storeA1, t04Key("lc-link"), session, bundle, claims.LinkInput{ExpectedGeneration: generation, ReleaseBinding: release})
++	if err != nil {
++		t.Fatalf("IssueLink gen=%d release=%t: %v", generation, release, err)
++	}
++	if _, perr := claims.ParseLinkToken(string(l.Token)); perr != nil || len(l.Token) != 43 || l.Replayed || l.Generation != generation+1 {
++		t.Fatalf("issued link: len=%d gen=%d replayed=%t parse=%v", len(l.Token), l.Generation, l.Replayed, perr)
++	}
++	return l
++}
++
++func (h *lcHarness) bundles(token, store, session string, page pagination.Request) (out pagination.Page[claims.Bundle], err error) {
++	err = h.do(token, store, func(tx pgx.Tx, s platform.Scope) (e error) {
++		out, e = claims.ListBundles(h.ctx, tx, s, token, session, page)
++		return e
++	})
++	return out, err
++}
++
++func (h *lcHarness) preview(c buyer.Capability, token claims.LinkToken) (claims.Preview, error) {
++	return cqBuyer(h.a.runtime, c, func(ctx context.Context, tx pgx.Tx, s buyer.Scope) (claims.Preview, error) {
++		return claims.PreviewLink(ctx, tx, s, token)
++	})
++}
++
++func (h *lcHarness) redeem(c buyer.Capability, key string, token claims.LinkToken, version int64) (claims.Redeemed, error) {
++	return cqBuyer(h.a.runtime, c, func(ctx context.Context, tx pgx.Tx, s buyer.Scope) (claims.Redeemed, error) {
++		return claims.RedeemLink(ctx, tx, s, key, token, claims.RedeemInput{ExpectedBundleVersion: version})
++	})
++}
++
++func (h *lcHarness) cartOf(t *testing.T, c buyer.Capability) storefront.Cart {
++	t.Helper()
++	cart, err := cqBuyer(h.a.runtime, c, func(ctx context.Context, tx pgx.Tx, s buyer.Scope) (storefront.Cart, error) {
++		return storefront.GetCart(ctx, tx, s)
++	})
++	if err != nil {
++		t.Fatalf("GetCart: %v", err)
++	}
++	return cart
++}
++
++func (h *lcHarness) putCart(c buyer.Capability, key string, in storefront.CartInput) (storefront.Cart, error) {
++	return cqBuyer(h.a.runtime, c, func(ctx context.Context, tx pgx.Tx, s buyer.Scope) (storefront.Cart, error) {
++		return storefront.SetCart(ctx, tx, s, key, in)
++	})
++}
++
++// bgMerchant runs op in its own merchant transaction on a goroutine and returns the
++// backend pid first, so the caller can observe a lock wait in pg_stat_activity
++// (lpWaitLock) instead of sleeping.
++func (h *lcHarness) bgMerchant(t *testing.T, token, store string, op func(pgx.Tx, platform.Scope) error) (int, <-chan error) {
++	t.Helper()
++	pids, done := make(chan int, 1), make(chan error, 1)
++	go func() {
++		done <- h.do(token, store, func(tx pgx.Tx, s platform.Scope) error {
++			var pid int
++			if err := tx.QueryRow(h.ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
++				return err
++			}
++			pids <- pid
++			return op(tx, s)
++		})
++	}()
++	return lcPID(t, pids, done)
++}
++
++// bgBuyer is bgMerchant for a buyer.WithScope transaction.
++func (h *lcHarness) bgBuyer(t *testing.T, c buyer.Capability, op func(context.Context, pgx.Tx, buyer.Scope) error) (int, <-chan error) {
++	t.Helper()
++	pids, done := make(chan int, 1), make(chan error, 1)
++	go func() {
++		done <- buyer.WithScope(h.ctx, h.a.runtime, c.Token, c.Scope.StoreID, func(ctx context.Context, tx pgx.Tx, s buyer.Scope) error {
++			var pid int
++			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
++				return err
++			}
++			pids <- pid
++			return op(ctx, tx, s)
++		})
++	}()
++	return lcPID(t, pids, done)
++}
++
++func lcPID(t *testing.T, pids <-chan int, done <-chan error) (int, <-chan error) {
++	t.Helper()
++	select {
++	case pid := <-pids:
++		return pid, done
++	case err := <-done:
++		t.Fatalf("background transaction ended before reporting its pid: %v", err)
++	case <-time.After(5 * time.Second):
++		t.Fatal("background transaction did not start")
++	}
++	return 0, done
++}
++
++// lcHold is an open transaction that already did its work and holds its locks until
++// finish (commit) is called; t.Cleanup always finishes it.
++type lcHold struct {
++	release  chan struct{}
++	done     chan error
++	once     sync.Once
++	finished bool
++	result   error
++}
++
++func (x *lcHold) finish(t *testing.T) error {
++	t.Helper()
++	x.once.Do(func() { close(x.release) })
++	if !x.finished {
++		x.result, x.finished = waitError(t, x.done), true
++	}
++	return x.result
++}
++
++func (h *lcHarness) hold(t *testing.T, run func(fn func() error) error, op func() error) *lcHold {
++	t.Helper()
++	x := &lcHold{release: make(chan struct{}), done: make(chan error, 1)}
++	ready := make(chan error, 1)
++	go func() {
++		x.done <- run(func() error {
++			if err := op(); err != nil {
++				ready <- err
++				return err
++			}
++			ready <- nil
++			<-x.release
++			return nil
++		})
++	}()
++	select {
++	case err := <-ready:
++		if err != nil {
++			t.Fatalf("held transaction work failed: %v", err)
++		}
++	case <-time.After(5 * time.Second):
++		t.Fatal("held transaction did not become ready")
++	}
++	t.Cleanup(func() {
++		x.once.Do(func() { close(x.release) })
++		if !x.finished {
++			select {
++			case <-x.done:
++			case <-time.After(6 * time.Second):
++				t.Error("held transaction did not end")
++			}
++		}
++	})
++	return x
++}
++
++func (h *lcHarness) holdMerchant(t *testing.T, token, store string, op func(pgx.Tx, platform.Scope) error) *lcHold {
++	t.Helper()
++	var tx pgx.Tx
++	var scope platform.Scope
++	return h.hold(t, func(fn func() error) error {
++		return h.do(token, store, func(inner pgx.Tx, s platform.Scope) error { tx, scope = inner, s; return fn() })
++	}, func() error { return op(tx, scope) })
++}
++
++func (h *lcHarness) holdBuyer(t *testing.T, c buyer.Capability, op func(context.Context, pgx.Tx, buyer.Scope) error) *lcHold {
++	t.Helper()
++	var tx pgx.Tx
++	var scope buyer.Scope
++	var ctx context.Context
++	return h.hold(t, func(fn func() error) error {
++		return buyer.WithScope(h.ctx, h.a.runtime, c.Token, c.Scope.StoreID, func(inner context.Context, itx pgx.Tx, s buyer.Scope) error {
++			ctx, tx, scope = inner, itx, s
++			return fn()
++		})
++	}, func() error { return op(ctx, tx, scope) })
++}
++
++// lcOwner reads claims.bundles.owner_id (no runtime role may read it, §3.2).
++func lcOwner(t *testing.T, f *testFixture, bundle string) string {
++	t.Helper()
++	var owner string
++	if err := f.owner.QueryRow(context.Background(), `SELECT coalesce(owner_id::text,'') FROM claims.bundles WHERE id=$1`, bundle).Scan(&owner); err != nil {
++		t.Fatalf("read binding: %v", err)
++	}
++	return owner
++}
++
++type lcLinkRow struct {
++	hash             []byte
++	generation       int64
++	issued, expires  time.Time
++	exactly72, found bool
++}
++
++// lcLinkState reads the stored link row of a bundle (owner SQL; token_hash is writer-only).
++func lcLinkState(t *testing.T, f *testFixture, bundle string) (row lcLinkRow) {
++	t.Helper()
++	err := f.owner.QueryRow(context.Background(), `SELECT token_hash,generation,issued_at,expires_at,expires_at-issued_at=interval '72 hours'
++		FROM claims.links WHERE bundle_id=$1`, bundle).Scan(&row.hash, &row.generation, &row.issued, &row.expires, &row.exactly72)
++	if errors.Is(err, pgx.ErrNoRows) {
++		return row
++	}
++	if err != nil {
++		t.Fatalf("read link: %v", err)
++	}
++	row.found = true
++	return row
++}
++
++// lcDigest fingerprints the full content of every base table in schemas, so a gate can
++// prove that claims code wrote nothing there (§1: claims never touch inventory, carts...).
++func lcDigest(t *testing.T, f *testFixture, schemas ...string) map[string]string {
++	t.Helper()
++	rows, err := f.owner.Query(context.Background(), `SELECT format('%I.%I',table_schema,table_name) FROM information_schema.tables
++		WHERE table_schema=ANY($1) AND table_type='BASE TABLE' ORDER BY 1`, schemas)
++	if err != nil {
++		t.Fatal(err)
++	}
++	tables, err := pgx.CollectRows(rows, pgx.RowTo[string])
++	if err != nil || len(tables) == 0 {
++		t.Fatalf("digest tables: %v %v", tables, err)
++	}
++	out := map[string]string{}
++	for _, table := range tables {
++		var digest string
++		if err := f.owner.QueryRow(context.Background(), `SELECT count(*)::text||':'||coalesce(md5(string_agg(t::text,E'\n' ORDER BY t::text)),'') FROM `+table+` t`).Scan(&digest); err != nil {
++			t.Fatalf("digest %s: %v", table, err)
++		}
++		out[table] = digest
++	}
++	return out
++}
++
++func lcSameDigest(t *testing.T, label string, before, after map[string]string) {
++	t.Helper()
++	for table, digest := range before {
++		if after[table] != digest {
++			t.Fatalf("%s: %s changed (%s -> %s)", label, table, digest, after[table])
++		}
++	}
++	if len(after) != len(before) {
++		t.Fatalf("%s: table set changed", label)
++	}
++}
++
++func lcIs(t *testing.T, err, want error, label string) {
++	t.Helper()
++	if !errors.Is(err, want) {
++		t.Fatalf("%s: err=%v, want %v", label, err, want)
++	}
++}
++
++// lcNotPG asserts an error carries no PostgreSQL error (whose message/DETAIL could echo
++// personal data, P2(b)).
++func lcNotPG(t *testing.T, err error, label string) {
++	t.Helper()
++	var pgErr *pgconn.PgError
++	if errors.As(err, &pgErr) {
++		t.Fatalf("%s: raw PostgreSQL error %s escaped the claims error mapping", label, pgErr.Code)
++	}
++}
++
++func lcItems(items []storefront.Item) map[string]int64 {
++	out := map[string]int64{}
++	for _, item := range items {
++		out[item.SKUID] = item.Quantity
++	}
++	return out
++}
++
++func lcSkipped(skipped []claims.Skipped) []claims.Skipped {
++	out := append([]claims.Skipped(nil), skipped...)
++	sort.Slice(out, func(i, j int) bool { return out[i].SKUID+out[i].Reason < out[j].SKUID+out[j].Reason })
++	return out
++}
++
++func lcSHA(s string) string { sum := sha256.Sum256([]byte(s)); return hex.EncodeToString(sum[:]) }
++
++// TestLiveClaimsKC02Units is KC02 over the exported API only (UNIT; no database):
++// NormalizeKeyword/NormalizeLabel vectors (§2.1-§2.2, P2(d)), ParseLinkToken strictness
++// (§4.2, §6), NewLabelKey size (§4.2) and redaction of every input/credential type (§4,
++// §8). The label_mac scope separation is not observable through the exported API and
++// is covered by KC08's receipt behaviour (same key + "@Amy "/"amy" replays; another
++// label conflicts).
++func TestLiveClaimsKC02Units(t *testing.T) {
++	for raw, want := range map[string]string{
++		"A1": "A1", "a1": "A1", "ａ１": "A1", "  a1\t": "A1", "\nA1\r": "A1", "Ａ１７": "A17", "101": "101",
++		"ABCDEFGHIJKLMNOP": "ABCDEFGHIJKLMNOP", "a1x2": "A1X2", "A1\u3000": "A1", "\u00a0b2": "B2",
++	} {
++		if got, ok := grammar.NormalizeKeyword(raw); !ok || got != want {
++			t.Fatalf("NormalizeKeyword(%q)=%q,%t want %q", raw, got, ok, want)
++		}
++	}
++	for _, raw := range []string{"", "   ", "A1+2", "A1+", "+2", "A 1", "ABCDEFGHIJKLMNOPQ", "\u017f1", "\u01311", "\u212a1", "A1\u200b",
++		"\ufeffA1", "①", "A²", "A-1", "#A1", "A1?", "不要", "A1👍", "A1\xff"} {
++		if got, ok := grammar.NormalizeKeyword(raw); ok {
++			t.Fatalf("NormalizeKeyword(%q) accepted %q", raw, got)
++		}
++	}
++	sixty := strings.Repeat("a", 60)
++	labels := map[string]string{
++		"@Amy ": "amy", "amy": "amy", "@ Amy": "amy", "  @Amy  ": "amy", "  Amy   Chen  ": "amy chen", "Amy\t\tChen": "amy chen",
++		"ＡＭＹ": "amy", "＠Amy": "amy", "Amy\u3000Chen": "amy chen", "Amy\u00a0Chen": "amy chen", "陳小美": "陳小美", sixty: sixty, "@" + sixty: sixty,
++	}
++	for raw, want := range labels {
++		got, ok := grammar.NormalizeLabel(raw)
++		if !ok || got != want {
++			t.Fatalf("NormalizeLabel(%q)=%q,%t want %q", raw, got, ok, want)
++		}
++	}
++	for _, raw := range []string{"", "   ", "@", "@ ", " @ ", strings.Repeat("a", 61), "a\x07b", "a\x00b", "a\u200bb", "a\u200eb", "a\ufeffb", "amy\xff"} {
++		if got, ok := grammar.NormalizeLabel(raw); ok {
++			t.Fatalf("NormalizeLabel(%q) accepted %q", raw, got)
++		}
++	}
++	// P2(d): idempotent on every accepted output, including @-prefixed tricks.
++	for _, raw := range []string{"@Amy ", "@@amy", "@ @amy", " @ amy", "@＠amy", "  Amy   Chen  ", "陳小美", "@" + sixty, "@a"} {
++		if y, ok := grammar.NormalizeLabel(raw); ok {
++			if again, ok2 := grammar.NormalizeLabel(y); !ok2 || again != y {
++				t.Fatalf("NormalizeLabel not idempotent: %q -> %q -> %q,%t", raw, y, again, ok2)
++			}
++		}
++	}
++
++	valid := base64.RawURLEncoding.EncodeToString(randomBytes(32))
++	if tok, err := claims.ParseLinkToken(valid); err != nil || string(tok) != valid {
++		t.Fatalf("canonical token rejected: %v", err)
++	}
++	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
++	last := strings.IndexByte(alphabet, valid[42])
++	nonCanonical := valid[:42] + string(alphabet[last|1]) // non-zero trailing bits decode to the same bytes
++	for name, raw := range map[string]string{
++		"empty": "", "short": valid[:42], "long": valid + "A", "padded": valid + "=", "space": " " + valid[1:], "trailing-bits": nonCanonical,
++		"std-plus": "+" + valid[1:], "std-slash": valid[:20] + "/" + valid[21:], "std-padded": base64.StdEncoding.EncodeToString(randomBytes(32)),
++		"newline": valid[:42] + "\n", "unicode": valid[:41] + "é",
++	} {
++		if _, err := claims.ParseLinkToken(raw); !errors.Is(err, command.ErrInvalid) {
++			t.Fatalf("ParseLinkToken %s accepted or wrong error: %v", name, err)
++		}
++	}
++	for _, n := range []int{0, 1, 31, 33, 64} {
++		if _, err := claims.NewLabelKey(randomBytes(n)); !errors.Is(err, command.ErrInvalid) {
++			t.Fatalf("NewLabelKey(%d bytes): %v", n, err)
++		}
++	}
++	if _, err := claims.NewLabelKey(nil); !errors.Is(err, command.ErrInvalid) {
++		t.Fatalf("NewLabelKey(nil): %v", err)
++	}
++
++	// Redaction (§4, §8): every fmt verb and JSON of every listed type hides its secrets.
++	raw := randomBytes(32)
++	key, err := claims.NewLabelKey(raw)
++	if err != nil {
++		t.Fatal(err)
++	}
++	actorKey := hex.EncodeToString(randomBytes(32))
++	label := "sentinel-label-" + t04Tag()
++	text := "A1是不是红色 0912345678"
++	tok := claims.LinkToken(valid)
++	secrets := []string{"0912345678", "A1是不是红色", label, actorKey, valid, hex.EncodeToString(raw), base64.StdEncoding.EncodeToString(raw),
++		base64.RawURLEncoding.EncodeToString(raw), strings.Trim(fmt.Sprint(raw), "[]")}
++	render := func(name string, v any) []string {
++		body, err := json.Marshal(v)
++		if err != nil {
++			t.Fatalf("%s json: %v", name, err)
++		}
++		return []string{fmt.Sprintf("%v", v), fmt.Sprintf("%+v", v), fmt.Sprintf("%#v", v), string(body),
++			fmt.Sprintf("%v", []any{v}), fmt.Sprintf("%+v", struct{ V any }{v})}
++	}
++	values := map[string]any{
++		"grammar.Result":   grammar.Parse("0912345678"),
++		"IngestInput":      claims.IngestInput{TenantID: randomUUID(), StoreID: randomUUID(), SessionID: randomUUID(), SourceKind: "manual", SourceEventID: randomUUID(), Platform: "manual", ActorKey: actorKey, ActorLabel: label, PrincipalID: randomUUID(), Text: text, OccurredAt: time.Now()},
++		"ManualClaimInput": claims.ManualClaimInput{ActorLabel: label, Text: text},
++		"LabelKey":         key,
++		"LinkToken":        tok,
++		"IssuedLink":       claims.IssuedLink{Token: tok, Generation: 1, ExpiresAt: time.Now()},
++	}
++	if r := grammar.Parse("0912345678"); r.Kind != grammar.Match || r.Keyword != "0912345678" {
++		t.Fatalf("redaction fixture must be a phone-shaped MATCH: %v", r.Kind)
++	}
++	for name, v := range values {
++		for _, out := range render(name, v) {
++			for _, secret := range secrets {
++				if strings.Contains(out, secret) {
++					t.Fatalf("%s rendering leaked a sentinel: %q", name, out)
++				}
++			}
++		}
++	}
++	// Constant "[redacted]" String/GoString/MarshalJSON for the listed input/credential types.
++	type redacted interface {
++		String() string
++		GoString() string
++		MarshalJSON() ([]byte, error)
++	}
++	for name, v := range values {
++		if name == "grammar.Result" {
++			continue // redacted to Version and Kind only (§4.1)
++		}
++		r, ok := v.(redacted)
++		if !ok {
++			t.Fatalf("%s lacks String/GoString/MarshalJSON", name)
++		}
++		body, err := r.MarshalJSON()
++		if r.String() != "[redacted]" || r.GoString() != "[redacted]" || err != nil || string(body) != `"[redacted]"` {
++			t.Fatalf("%s is not constant [redacted]: %q %q %s %v", name, r.String(), r.GoString(), body, err)
++		}
++	}
++	if out := fmt.Sprintf("%v", grammar.Parse("0912345678")); !strings.Contains(out, "MATCH") {
++		t.Fatalf("grammar.Result must still show its Kind: %q", out)
++	}
++	// Redaction never affects decoding of the M5 body (§4.2 json tags).
++	var decoded claims.ManualClaimInput
++	if err := json.Unmarshal([]byte(`{"bundle_id":"","actor_label":"@Amy ","text":"A1+2"}`), &decoded); err != nil || decoded.ActorLabel != "@Amy " || decoded.Text != "A1+2" {
++		t.Fatalf("ManualClaimInput decode: %v", err)
++	}
++}
++
++// TestLiveClaimsKC04Offers is KC04 (§4.2 CreateOffer/UpdateOffer rules, §1 offer model).
++func TestLiveClaimsKC04Offers(t *testing.T) {
++	h := lcSetup(t)
++	f := h.f
++	s1, s2 := h.draft(t, f.storeA1), h.draft(t, f.storeA1)
++	sku0, sku1 := h.stock.skus[0], h.stock.skus[1]
++
++	// Create: replay (canonical keyword before hashing), changed body 409.
++	key := t04Key("lc-offer")
++	first, err := h.createOffer(h.token, f.storeA1, key, s1, claims.OfferInput{Keyword: "ａ１", SKUID: sku0.ID, MaxQuantityPerClaim: 3})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !command.ValidID(first.ID) || first.SessionID != s1 || first.Keyword != "A1" || first.SKUID != sku0.ID || first.SKUCode != sku0.Code ||
++		first.ProductName != h.stock.product.Name || first.MaxQuantityPerClaim != 3 || !first.Active || first.Version != 1 || first.ActivatedAt.IsZero() || first.UpdatedAt.IsZero() {
++		t.Fatalf("created offer %+v", first)
++	}
++	for _, kw := range []string{"a1", "A1", " A1 ", "ａ１"} {
++		replay, err := h.createOffer(h.token, f.storeA1, key, s1, claims.OfferInput{Keyword: kw, SKUID: sku0.ID, MaxQuantityPerClaim: 3})
++		if err != nil || !reflect.DeepEqual(replay, first) {
++			t.Fatalf("canonical replay %q: %+v %v", kw, replay, err)
++		}
++	}
++	for name, in := range map[string]claims.OfferInput{
++		"max":     {Keyword: "A1", SKUID: sku0.ID, MaxQuantityPerClaim: 4},
++		"keyword": {Keyword: "A2", SKUID: sku0.ID, MaxQuantityPerClaim: 3},
++		"sku":     {Keyword: "A1", SKUID: sku1.ID, MaxQuantityPerClaim: 3},
++	} {
++		if _, err := h.createOffer(h.token, f.storeA1, key, s1, in); !errors.Is(err, command.ErrConflict) {
++			t.Fatalf("changed create body (%s) under one key: %v", name, err)
++		}
++	}
++	if _, err := h.createOffer(h.token, f.storeA1, key, s1, claims.OfferInput{Keyword: "A1", SKUID: sku0.ID, MaxQuantityPerClaim: 3}); err != nil {
++		t.Fatalf("replay after conflicts: %v", err)
++	}
++	if n := countRows(t, f.owner, `SELECT count(*) FROM live.offers WHERE session_id=$1`, s1); n != 1 {
++		t.Fatalf("replays created %d offers", n)
++	}
++	// Duplicate keyword; second active offer on one SKU (create); same keyword in another session.
++	lcIs(t, lcErr(h.createOffer(h.token, f.storeA1, t04Key("lc-offer"), s1, claims.OfferInput{Keyword: "a1", SKUID: sku1.ID, MaxQuantityPerClaim: 3})), command.ErrConflict, "duplicate keyword")
++	lcIs(t, lcErr(h.createOffer(h.token, f.storeA1, t04Key("lc-offer"), s1, claims.OfferInput{Keyword: "B1", SKUID: sku0.ID, MaxQuantityPerClaim: 3})), command.ErrConflict, "second active offer on SKU")
++	other := h.offer(t, s2, "A1", sku0.ID, 3)
++	if other.ID == first.ID || other.SessionID != s2 {
++		t.Fatalf("other-session offer %+v", other)
++	}
++	// Invalid inputs are ErrInvalid before any write (§4.5).
++	for name, in := range map[string]claims.OfferInput{
++		"plus": {Keyword: "A1+2", SKUID: sku1.ID, MaxQuantityPerClaim: 1}, "empty": {SKUID: sku1.ID, MaxQuantityPerClaim: 1},
++		"17": {Keyword: strings.Repeat("K", 17), SKUID: sku1.ID, MaxQuantityPerClaim: 1}, "kelvin": {Keyword: "\u212a1", SKUID: sku1.ID, MaxQuantityPerClaim: 1},
++		"max0": {Keyword: "C1", SKUID: sku1.ID, MaxQuantityPerClaim: 0}, "max1000": {Keyword: "C1", SKUID: sku1.ID, MaxQuantityPerClaim: 1000},
++		"sku": {Keyword: "C1", SKUID: "not-a-uuid", MaxQuantityPerClaim: 1}, "sku-upper": {Keyword: "C1", SKUID: strings.ToUpper(sku1.ID), MaxQuantityPerClaim: 1},
++	} {
++		lcIs(t, lcErr(h.createOffer(h.token, f.storeA1, t04Key("lc-offer-bad"), s1, in)), command.ErrInvalid, "invalid offer "+name)
++	}
++	lcIs(t, lcErr(h.createOffer(h.token, f.storeA1, t04Key("lc-offer-bad"), "not-a-session", claims.OfferInput{Keyword: "C1", SKUID: sku1.ID, MaxQuantityPerClaim: 1})), command.ErrInvalid, "invalid session id")
++	lcIs(t, lcErr(h.createOffer(h.token, f.storeA1, t04Key("lc-offer"), randomUUID(), claims.OfferInput{Keyword: "C1", SKUID: sku1.ID, MaxQuantityPerClaim: 1})), command.ErrNotFound, "missing session")
++	// SKU missing 404 / cross-store 404 / archived SKU, archived product, foreign currency 409.
++	archived := lcSKUs(t, f, f.tenantA, f.storeA1, "USD", 2)
++	mustExec(t, f.owner, `UPDATE catalog.skus SET status='archived' WHERE id=$1`, archived[0])
++	archivedProduct := lcSKUs(t, f, f.tenantA, f.storeA1, "USD", 1)
++	mustExec(t, f.owner, `UPDATE catalog.products SET status='archived' WHERE id=(SELECT product_id FROM catalog.skus WHERE id=$1)`, archivedProduct[0])
++	foreignCurrency := lcSKUs(t, f, f.tenantA, f.storeA1, "TWD", 1)
++	crossStore := lcSKUs(t, f, f.tenantA, f.storeA2, "USD", 1)
++	crossTenant := lcSKUs(t, f, f.tenantB, f.storeB, "TWD", 1)
++	for name, tc := range map[string]struct {
++		sku  string
++		want error
++	}{
++		"missing": {randomUUID(), command.ErrNotFound}, "cross-store": {crossStore[0], command.ErrNotFound}, "cross-tenant": {crossTenant[0], command.ErrNotFound},
++		"archived-sku": {archived[0], command.ErrConflict}, "archived-product": {archivedProduct[0], command.ErrConflict}, "foreign-currency": {foreignCurrency[0], command.ErrConflict},
++	} {
++		lcIs(t, lcErr(h.createOffer(h.token, f.storeA1, t04Key("lc-offer"), s1, claims.OfferInput{Keyword: "S1", SKUID: tc.sku, MaxQuantityPerClaim: 1})), tc.want, "offer SKU "+name)
++	}
++
++	// Update: replay, changed body 409, stale CAS 409, concurrent CAS one winner.
++	upKey := t04Key("lc-offer-up")
++	up := claims.OfferUpdate{ExpectedVersion: 1, MaxQuantityPerClaim: 5, Active: true}
++	u1, err := h.updateOffer(h.token, f.storeA1, upKey, s1, first.ID, up)
++	if err != nil || u1.Version != 2 || u1.MaxQuantityPerClaim != 5 || !u1.Active || !u1.ActivatedAt.Equal(first.ActivatedAt) || u1.Keyword != "A1" || u1.SKUID != sku0.ID {
++		t.Fatalf("update %+v %v", u1, err)
++	}
++	if replay, err := h.updateOffer(h.token, f.storeA1, upKey, s1, first.ID, up); err != nil || !reflect.DeepEqual(replay, u1) {
++		t.Fatalf("update replay %+v %v", replay, err)
++	}
++	up.MaxQuantityPerClaim = 6
++	lcIs(t, lcErr(h.updateOffer(h.token, f.storeA1, upKey, s1, first.ID, up)), command.ErrConflict, "changed update body")
++	lcIs(t, lcErr(h.updateOffer(h.token, f.storeA1, t04Key("lc-offer-up"), s1, first.ID, claims.OfferUpdate{ExpectedVersion: 1, MaxQuantityPerClaim: 7, Active: true})), command.ErrConflict, "stale offer version")
++	lcIs(t, lcErr(h.updateOffer(h.token, f.storeA1, t04Key("lc-offer-up"), s1, first.ID, claims.OfferUpdate{ExpectedVersion: 2, MaxQuantityPerClaim: 0, Active: true})), command.ErrInvalid, "update max 0")
++	lcIs(t, lcErr(h.updateOffer(h.token, f.storeA1, t04Key("lc-offer-up"), s2, first.ID, claims.OfferUpdate{ExpectedVersion: 2, MaxQuantityPerClaim: 2, Active: true})), command.ErrNotFound, "offer of another session")
++	cas := make([]error, 4)
++	start := make(chan struct{})
++	var wg sync.WaitGroup
++	for i := range cas {
++		wg.Add(1)
++		go func(i int) {
++			defer wg.Done()
++			<-start
++			_, cas[i] = h.updateOffer(h.token, f.storeA1, t04Key("lc-offer-cas"), s1, first.ID, claims.OfferUpdate{ExpectedVersion: 2, MaxQuantityPerClaim: int64(10 + i), Active: true})
++		}(i)
++	}
++	close(start)
++	wg.Wait()
++	if ok, conflicts := lcOutcomes(t, cas); ok != 1 || conflicts != len(cas)-1 {
++		t.Fatalf("offer CAS race winners=%d conflicts=%d", ok, conflicts)
++	}
++	current := h.board(t, s1).Offers[0]
++	if current.Version != 3 {
++		t.Fatalf("offer after CAS race %+v", current)
++	}
++
++	// Reactivation conflicts while another active offer holds the SKU; activated_at moves.
++	inactive := h.setOffer(t, s1, current, current.MaxQuantityPerClaim, false)
++	holder := h.offer(t, s1, "B1", sku0.ID, 2) // allowed: A1 no longer active on sku0
++	lcIs(t, lcErr(h.updateOffer(h.token, f.storeA1, t04Key("lc-offer-up"), s1, inactive.ID, claims.OfferUpdate{ExpectedVersion: inactive.Version, MaxQuantityPerClaim: 3, Active: true})), command.ErrConflict, "reactivation while SKU held")
++	h.setOffer(t, s1, holder, 2, false)
++	reactivated := h.setOffer(t, s1, inactive, 3, true)
++	if !reactivated.ActivatedAt.After(first.ActivatedAt) || !reactivated.Active {
++		t.Fatalf("reactivation must move activated_at: %v -> %v", first.ActivatedAt, reactivated.ActivatedAt)
++	}
++	// Keyword and SKU are immutable (no UPDATE grant, §3.2) -> 42501.
++	for _, q := range []string{`UPDATE live.offers SET keyword='Z1' WHERE id=$1`, `UPDATE live.offers SET sku_id=sku_id WHERE id=$1`,
++		`UPDATE live.offers SET session_id=session_id WHERE id=$1`, `DELETE FROM live.offers WHERE id=$1`} {
++		err := h.do(h.token, f.storeA1, func(tx pgx.Tx, _ platform.Scope) error { _, e := tx.Exec(h.ctx, q, first.ID); return e })
++		requirePGCode(t, err, "42501", q)
++	}
++
++	// Missing live:manage (read-only principal).
++	_, readerToken := lcPrincipal(t, f, f.tenantA, []string{f.storeA1}, "store:read", "live:read")
++	lcIs(t, lcErr(h.createOffer(readerToken, f.storeA1, t04Key("lc-offer"), s1, claims.OfferInput{Keyword: "R1", SKUID: sku1.ID, MaxQuantityPerClaim: 1})), platform.ErrForbidden, "create without live:manage")
++	lcIs(t, lcErr(h.updateOffer(readerToken, f.storeA1, t04Key("lc-offer"), s1, first.ID, claims.OfferUpdate{ExpectedVersion: reactivated.Version, MaxQuantityPerClaim: 1, Active: true})), platform.ErrForbidden, "update without live:manage")
++	if _, err := h.getBoard(readerToken, f.storeA1, s1); err != nil {
++		t.Fatalf("live:read board: %v", err)
++	}
++
++	// Typo recovery (§12): A11->X deactivated, A1->X created, A1 accepted, redeem applies
++	// only the active offer's line and reports the inactive one as skipped.
++	s3 := h.draft(t, f.storeA1)
++	x := lcSKUs(t, f, f.tenantA, f.storeA1, "USD", 1)[0]
++	h.open(t, s3, claims.MatchExact)
++	typo := h.offer(t, s3, "A11", x, 5)
++	onTypo := h.accepted(t, s3, "", "typo-buyer", "A11+2")
++	h.setOffer(t, s3, typo, 5, false)
++	fixed := h.offer(t, s3, "A1", x, 5)
++	onFixed := h.accepted(t, s3, onTypo.BundleID, "", "A1+3")
++	if onFixed.OfferID != fixed.ID || onFixed.Quantity != 3 || onFixed.BundleID != onTypo.BundleID {
++		t.Fatalf("typo recovery claim %+v", onFixed)
++	}
++	l := h.link(t, s3, onTypo.BundleID, 0, false)
++	c := mustIssue(t, h.service, f.storeA1)
++	redeemed, err := h.redeem(c, t04Key("lc-redeem"), l.Token, onFixed.BundleVersion)
++	if err != nil || !reflect.DeepEqual(lcItems(redeemed.Applied), map[string]int64{x: 3}) ||
++		!reflect.DeepEqual(lcSkipped(redeemed.Skipped), []claims.Skipped{{SKUID: x, Reason: "offer_inactive"}}) || !reflect.DeepEqual(lcItems(redeemed.Cart.Items), map[string]int64{x: 3}) {
++		t.Fatalf("typo recovery redeem %+v %v", redeemed, err)
++	}
++	h.closeWindow(t, s3)
++
++	// 201st offer under concurrency: 196 existing + 5 concurrent creates -> 4 win, 1 409.
++	s4 := h.draft(t, f.storeA1)
++	many := lcSKUs(t, f, f.tenantA, f.storeA1, "USD", 202)
++	mustExec(t, f.owner, `INSERT INTO live.offers(tenant_id,store_id,session_id,keyword,sku_id,max_quantity_per_claim,principal_id)
++		SELECT $1,$2,$3,'K'||lpad(i::text,4,'0'),sku,1,$4 FROM unnest($5::uuid[]) WITH ORDINALITY AS u(sku,i)`, f.tenantA, f.storeA1, s4, h.actor, many[:196])
++	racers := make([]error, 5)
++	start = make(chan struct{})
++	for i := range racers {
++		wg.Add(1)
++		go func(i int) {
++			defer wg.Done()
++			<-start
++			_, racers[i] = h.createOffer(h.token, f.storeA1, t04Key("lc-offer-cap"), s4, claims.OfferInput{Keyword: fmt.Sprintf("CAP%d", i), SKUID: many[196+i], MaxQuantityPerClaim: 1})
++		}(i)
++	}
++	close(start)
++	wg.Wait()
++	if ok, conflicts := lcOutcomes(t, racers); ok != 4 || conflicts != 1 {
++		t.Fatalf("offer cap race winners=%d conflicts=%d", ok, conflicts)
++	}
++	lcIs(t, lcErr(h.createOffer(h.token, f.storeA1, t04Key("lc-offer-cap"), s4, claims.OfferInput{Keyword: "CAPX", SKUID: many[201], MaxQuantityPerClaim: 1})), command.ErrConflict, "201st offer")
++	if n := countRows(t, f.owner, `SELECT count(*) FROM live.offers WHERE session_id=$1`, s4); n != 200 {
++		t.Fatalf("offers per session=%d, want cap 200", n)
++	}
++
++	// Create while another transaction holds the session FOR SHARE (media/Studio readers)
++	// succeeds within the inherited lock_timeout: no live.sessions row lock (§4.2).
++	s5 := h.draft(t, f.storeA1)
++	extra := lcSKUs(t, f, f.tenantA, f.storeA1, "USD", 3)
++	share, err := f.owner.Begin(h.ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = share.Exec(h.ctx, `SELECT 1 FROM live.sessions WHERE id=$1 FOR SHARE`, s5); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := h.createOffer(h.token, f.storeA1, t04Key("lc-offer-share"), s5, claims.OfferInput{Keyword: "SH1", SKUID: extra[0], MaxQuantityPerClaim: 1}); err != nil {
++		t.Fatalf("create blocked by session FOR SHARE: %v", err)
++	}
++	_ = share.Rollback(h.ctx)
++
++	// Revoked token after the receipt lock wait -> ErrUnauthorized, nothing written.
++	_, waitToken := lcPrincipal(t, f, f.tenantA, []string{f.storeA1}, "store:read", "live:read", "live:manage")
++	waitKey := t04Key("lc-offer-wait")
++	lock, err := f.owner.Begin(h.ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer lock.Rollback(h.ctx)
++	if _, err = lock.Exec(h.ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "command|"+f.tenantA+"|"+f.storeA1+"|live.claim.offer.create|"+waitKey); err != nil {
++		t.Fatal(err)
++	}
++	pid, done := h.bgMerchant(t, waitToken, f.storeA1, func(tx pgx.Tx, s platform.Scope) error {
++		_, err := claims.CreateOffer(h.ctx, tx, s, waitToken, waitKey, s5, claims.OfferInput{Keyword: "WT1", SKUID: extra[1], MaxQuantityPerClaim: 1})
++		return err
++	})
++	lpWaitLock(t, f, pid, true)
++	mustExec(t, f.owner, `UPDATE identity.sessions SET revoked_at=clock_timestamp() WHERE token_hash=$1`, tokenHash(waitToken))
++	_ = lock.Rollback(h.ctx)
++	lcIs(t, waitError(t, done), platform.ErrUnauthorized, "revoked during receipt wait")
++	if n := countRows(t, f.owner, `SELECT count(*) FROM live.offers WHERE session_id=$1 AND keyword='WT1'`, s5); n != 0 {
++		t.Fatal("revoked create wrote an offer")
++	}
++	// Permission removed while a replay waits -> the replay is refused too (§4.2
++	// "again after command.Run returns (including replay)").
++	replayPrincipal, replayToken := lcPrincipal(t, f, f.tenantA, []string{f.storeA1}, "store:read", "live:read", "live:manage")
++	replayKey := t04Key("lc-offer-replay")
++	replayIn := claims.OfferInput{Keyword: "RP1", SKUID: extra[2], MaxQuantityPerClaim: 1}
++	if _, err := h.createOffer(replayToken, f.storeA1, replayKey, s5, replayIn); err != nil {
++		t.Fatal(err)
++	}
++	lock2, err := f.owner.Begin(h.ctx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer lock2.Rollback(h.ctx)
++	if _, err = lock2.Exec(h.ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "command|"+f.tenantA+"|"+f.storeA1+"|live.claim.offer.create|"+replayKey); err != nil {
++		t.Fatal(err)
++	}
++	pid, done = h.bgMerchant(t, replayToken, f.storeA1, func(tx pgx.Tx, s platform.Scope) error {
++		_, err := claims.CreateOffer(h.ctx, tx, s, replayToken, replayKey, s5, replayIn)
++		return err
++	})
++	lpWaitLock(t, f, pid, true)
++	mustExec(t, f.owner, `DELETE FROM identity.store_grants WHERE principal_id=$1 AND permission='live:manage'`, replayPrincipal)
++	_ = lock2.Rollback(h.ctx)
++	lcIs(t, waitError(t, done), platform.ErrForbidden, "replay after live:manage removed")
++
++	// Audit failure rolls back offer and receipt (§4.2: command.Run + command.Audit in one tx).
++	fn := "lc_audit_fail_" + t04Tag()
++	ident := pgx.Identifier{"ops", fn}.Sanitize()
++	mustExec(t, f.owner, fmt.Sprintf(`CREATE FUNCTION %s() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic audit failure' USING ERRCODE='P0001'; END $$`, ident))
++	mustExec(t, f.owner, fmt.Sprintf(`CREATE TRIGGER %s BEFORE INSERT ON ops.audit_events FOR EACH ROW WHEN (NEW.action='live.claim.offer.created' AND NEW.principal_id='%s'::uuid) EXECUTE FUNCTION %s()`,
++		pgx.Identifier{fn}.Sanitize(), h.actor, ident))
++	t.Cleanup(func() {
++		mustExec(t, f.owner, fmt.Sprintf(`DROP TRIGGER IF EXISTS %s ON ops.audit_events`, pgx.Identifier{fn}.Sanitize()))
++		mustExec(t, f.owner, `DROP FUNCTION IF EXISTS `+ident+`()`)
++	})
++	auditKey := t04Key("lc-offer-audit")
++	auditIn := claims.OfferInput{Keyword: "AU1", SKUID: extra[1], MaxQuantityPerClaim: 1}
++	_, err = h.createOffer(h.token, f.storeA1, auditKey, s5, auditIn)
++	requirePGCode(t, err, "P0001", "audit failure")
++	if countRows(t, f.owner, `SELECT count(*) FROM live.offers WHERE session_id=$1 AND keyword='AU1'`, s5) != 0 ||
++		countRows(t, f.owner, `SELECT count(*) FROM ops.command_results WHERE idempotency_key=$1`, auditKey) != 0 {
++		t.Fatal("audit failure left an offer or a receipt")
++	}
++	mustExec(t, f.owner, fmt.Sprintf(`DROP TRIGGER %s ON ops.audit_events`, pgx.Identifier{fn}.Sanitize()))
++	if _, err := h.createOffer(h.token, f.storeA1, auditKey, s5, auditIn); err != nil {
++		t.Fatalf("same key after audit recovery: %v", err)
++	}
++	if n := countRows(t, f.owner, `SELECT count(*) FROM ops.audit_events WHERE principal_id=$1 AND action='live.claim.offer.created'`, h.actor); n < 6 {
++		t.Fatalf("offer creations must be audited, got %d", n)
++	}
++}
++
++func lcErr[T any](_ T, err error) error { return err }
++
++// lcOutcomes counts nil and ErrConflict results and fails on any other error.
++func lcOutcomes(t *testing.T, errs []error) (ok, conflicts int) {
++	t.Helper()
++	for _, err := range errs {
++		switch {
++		case err == nil:
++			ok++
++		case errors.Is(err, command.ErrConflict):
++			conflicts++
++		default:
++			t.Fatalf("unexpected race error: %v (sqlstate %s)", err, sqlState(err))
++		}
++	}
++	return ok, conflicts
++}
++
++// TestLiveClaimsKC05Window is KC05 (§4.2 SetWindow rules, §1 window model, §5.4 fence).
++func TestLiveClaimsKC05Window(t *testing.T) {
++	h := lcSetup(t)
++	f := h.f
++	s := h.draft(t, f.storeA1)
++	audits := func(action string) int {
++		return countRows(t, f.owner, `SELECT count(*) FROM ops.audit_events WHERE principal_id=$1 AND action=$2`, h.actor, "live.claim.window."+action)
++	}
++	// No row yet: reported CLOSED/EXACT version 0.
++	if w := h.board(t, s).Window; w.SessionID != s || w.State != claims.WindowClosed || w.MatchMode != claims.MatchExact || w.Version != 0 || w.Generation != 0 || w.OpenedAt != nil || w.ClosedAt != nil {
++		t.Fatalf("absent window %+v", w)
++	}
++	for name, in := range map[string]claims.WindowInput{
++		"state": {State: "PAUSED", MatchMode: claims.MatchExact}, "mode": {State: claims.WindowClosed, MatchMode: "CONTAINS"},
++		"version": {ExpectedVersion: -1, State: claims.WindowClosed, MatchMode: claims.MatchExact}, "empty": {},
++	} {
++		lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, s, in)), command.ErrInvalid, "invalid window "+name)
++	}
++	lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, randomUUID(), claims.WindowInput{State: claims.WindowClosed, MatchMode: claims.MatchExact})), command.ErrNotFound, "missing session")
++	// expected 0 + CLOSED inserts generation 0 at version 1 in the requested mode.
++	w := h.mustWindow(t, s, 0, claims.WindowClosed, claims.MatchKeywordQtyOnly)
++	if w.State != claims.WindowClosed || w.MatchMode != claims.MatchKeywordQtyOnly || w.Generation != 0 || w.Version != 1 || w.OpenedAt != nil || w.ClosedAt != nil {
++		t.Fatalf("inserted CLOSED %+v", w)
++	}
++	lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, s, claims.WindowInput{ExpectedVersion: 0, State: claims.WindowClosed, MatchMode: claims.MatchExact})), command.ErrConflict, "second insert")
++	lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, s, claims.WindowInput{ExpectedVersion: 1, State: claims.WindowClosed, MatchMode: claims.MatchKeywordQtyOnly})), command.ErrConflict, "identical CLOSED->CLOSED")
++	w = h.mustWindow(t, s, 1, claims.WindowClosed, claims.MatchExact) // mode_set
++	if w.Version != 2 || w.MatchMode != claims.MatchExact || w.Generation != 0 {
++		t.Fatalf("mode_set %+v", w)
++	}
++	lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, s, claims.WindowInput{ExpectedVersion: 2, State: claims.WindowOpen, MatchMode: claims.MatchKeywordQtyOnly})), command.ErrConflict, "open with a different mode")
++	w = h.mustWindow(t, s, 2, claims.WindowOpen, claims.MatchExact)
++	if w.State != claims.WindowOpen || w.Generation != 1 || w.Version != 3 || w.OpenedAt == nil || w.ClosedAt != nil {
++		t.Fatalf("CLOSED->OPEN %+v", w)
++	}
++	opened := *w.OpenedAt
++	lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, s, claims.WindowInput{ExpectedVersion: 3, State: claims.WindowOpen, MatchMode: claims.MatchExact})), command.ErrConflict, "OPEN->OPEN")
++	lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, s, claims.WindowInput{ExpectedVersion: 3, State: claims.WindowOpen, MatchMode: claims.MatchKeywordQtyOnly})), command.ErrConflict, "mode change while OPEN")
++	lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, s, claims.WindowInput{ExpectedVersion: 3, State: claims.WindowClosed, MatchMode: claims.MatchKeywordQtyOnly})), command.ErrConflict, "close with a different mode")
++	lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, s, claims.WindowInput{ExpectedVersion: 2, State: claims.WindowClosed, MatchMode: claims.MatchExact})), command.ErrConflict, "stale version")
++	// A second OPEN window in the store is 23505 -> ErrConflict.
++	other := h.draft(t, f.storeA1)
++	lcIs(t, lcErr(h.setWindow(h.token, f.storeA1, other, claims.WindowInput{State: claims.WindowOpen, MatchMode: claims.MatchExact})), command.ErrConflict, "second OPEN window in store")
++	if h.board(t, other).Window.Version != 0 {
++		t.Fatal("rejected open left a window row")
++	}
++	w = h.mustWindow(t, s, 3, claims.WindowClosed, claims.MatchExact)
++	if w.State != claims.WindowClosed || w.Generation != 1 || w.OpenedAt == nil || !w.OpenedAt.Equal(opened) || w.ClosedAt == nil || w.ClosedAt.Before(opened) || w.MatchMode != claims.MatchExact {
++		t.Fatalf("OPEN->CLOSED %+v", w)
++	}
++	for want := int64(2); want <= 3; want++ {
++		w = h.mustWindow(t, s, w.Version, claims.WindowOpen, claims.MatchExact)
++		if w.Generation != want || w.ClosedAt != nil || !w.OpenedAt.After(opened) {
++			t.Fatalf("reopen generation %+v want %d", w, want)
++		}
++		w = h.mustWindow(t, s, w.Version, claims.WindowClosed, claims.MatchExact)
++	}
++	// One audit row per successful SetWindow (8 here); the contract does not name the
++	// action of the initial CLOSED insert, so only opened/closed are counted exactly.
++	total := countRows(t, f.owner, `SELECT count(*) FROM ops.audit_events WHERE principal_id=$1 AND action LIKE 'live.claim.window.%'`, h.actor)
++	if audits("opened") != 3 || audits("closed") != 3 || audits("mode_set") < 1 || total != 8 {
++		t.Fatalf("window audits opened=%d closed=%d mode_set=%d total=%d", audits("opened"), audits("closed"), audits("mode_set"), total)
++	}
++	// Missing live:manage.
++	_, readerToken := lcPrincipal(t, f, f.tenantA, []string{f.storeA1}, "store:read", "live:read")
++	lcIs(t, lcErr(h.setWindow(readerToken, f.storeA1, s, claims.WindowInput{ExpectedVersion: w.Version, State: claims.WindowOpen, MatchMode: claims.MatchExact})), platform.ErrForbidden, "window without live:manage")
++
++	// Two sessions opened concurrently in one store -> exactly one 409.
++	a, b := h.draft(t, f.storeA1), h.draft(t, f.storeA1)
++	results := make([]error, 2)
++	start := make(chan struct{})
++	var wg sync.WaitGroup
++	for i, session := range []string{a, b} {
++		wg.Add(1)
++		go func(i int, session string) {
++			defer wg.Done()
++			<-start
++			_, results[i] = h.setWindow(h.token, f.storeA1, session, claims.WindowInput{State: claims.WindowOpen, MatchMode: claims.MatchExact})
++		}(i, session)
++	}
++	close(start)
++	wg.Wait()
++	if ok, conflicts := lcOutcomes(t, results); ok != 1 || conflicts != 1 {
++		t.Fatalf("concurrent opens winners=%d conflicts=%d", ok, conflicts)
++	}
++	winner := a
++	if results[0] != nil {
++		winner = b
++	}
++	h.closeWindow(t, winner)
++
++	// Close waits for an in-flight ingest holding the window FOR SHARE (observed in
++	// pg_stat_activity), then any later ingest sees CLOSED and persists nothing.
++	fence := h.draft(t, f.storeA1)
++	fw := h.open(t, fence, claims.MatchExact)
++	h.offer(t, fence, "A1", h.stock.skus[0].ID, 5)
++	inflight := h.holdMerchant(t, h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) error {
++		r, err := claims.RecordManualClaim(h.ctx, tx, sc, h.labels, h.token, t04Key("lc-inflight"), fence, claims.ManualClaimInput{ActorLabel: "inflight", Text: "A1"})
++		if err == nil && r.Outcome != claims.OutcomeAccepted {
++			err = fmt.Errorf("in-flight claim not accepted: %+v", r)
++		}
++		return err
++	})
++	pid, done := h.bgMerchant(t, h.token, f.storeA1, func(tx pgx.Tx, sc platform.Scope) error {
++		_, err := claims.SetWindow(h.ctx, tx, sc, h.token, t04Key("lc-close"), fence, claims.WindowInput{ExpectedVersion: fw.Version, State: claims.WindowClosed, MatchMode: claims.MatchExact})
++		return err
++	})
++	lpWaitLock(t, f, pid, false)
++	if err := inflight.finish(t); err != nil {
++		t.Fatalf("in-flight ingest: %v", err)
++	}
++	if err := waitError(t, done); err != nil {
++		t.Fatalf("close after in-flight ingest: %v", err)
++	}
++	events := countRows(t, f.owner, `SELECT count(*) FROM claims.events WHERE session_id=$1`, fence)
++	bundlesBefore := countRows(t, f.owner, `SELECT count(*) FROM claims.bundles WHERE session_id=$1`, fence)
++	if events != 1 || bundlesBefore != 1 {
++		t.Fatalf("in-flight ingest must commit before close: events=%d bundles=%d", events, bundlesBefore)
++	}
++	late := h.claim(t, fence, claims.ManualClaimInput{ActorLabel: "late", Text: "A1"})
++	if late.Outcome != claims.OutcomeRejected || late.Reason != claims.ReasonWindowClosed || late.BundleID != "" || late.OfferID != "" {
++		t.Fatalf("ingest after close %+v", late)
++	}
++	if countRows(t, f.owner, `SELECT count(*) FROM claims.events WHERE session_id=$1`, fence) != events ||
++		countRows(t, f.owner, `SELECT count(*) FROM claims.bundles WHERE session_id=$1`, fence) != bundlesBefore {
++		t.Fatal("WINDOW_CLOSED persisted a row")
++	}
++}
+-- 
+2.43.0
+

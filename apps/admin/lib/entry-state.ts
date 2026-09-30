@@ -91,3 +91,30 @@ export function encodeEntryJournal(journal: EntryJournal) {
     throw new Error("entry journal too large");
   return encoded;
 }
+
+// Password-page helpers (merchant-password-auth-v1 §7.3, U6/U7). Pure so node --test can import them.
+
+// U6: first character + "***" + "@domain". Shown after step 1 for every address alike, so it never
+// hints whether an account exists; a malformed value collapses to "***".
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf("@");
+  if (at < 1) return "***";
+  const first = [...email.slice(0, at)][0];
+  return `${first}***${email.slice(at)}`;
+}
+
+// U7: minutes for the throttled message = ceil(Retry-After / 60), at least 1.
+export function throttleMinutes(retryAfterSeconds: number): number {
+  return Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+    ? Math.max(1, Math.ceil(retryAfterSeconds / 60))
+    : 1;
+}
+
+// Fills {name} placeholders from a fixed map; unknown placeholders are left as written.
+export function fillCopy(text: string, values: Record<string, string | number>): string {
+  return text.replace(/\{(\w+)\}/g, (whole, key: string) =>
+    key in values ? String(values[key]) : whole,
+  );
+}
+
+export const RESEND_COOLDOWN_SECONDS = 60;

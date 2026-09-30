@@ -68,7 +68,7 @@ func ewCloseSeedPools(t *testing.T, p psHarness) {
 		return n
 	}
 	max, reserved, super := show("max_connections"), show("reserved_connections"), show("superuser_reserved_connections")
-	if max != 30 || reserved < 0 || super < 0 || reserved+super >= max {
+	if max != 60 || reserved < 0 || super < 0 || reserved+super >= max {
 		t.Fatalf("unexpected isolated PG capacity: max=%d reserved=%d super=%d", max, reserved, super)
 	}
 	seeds := []struct {
@@ -815,9 +815,7 @@ func TestBuyerCheckoutExpiryRuntimeBinarySignalAndPoolCleanup(t *testing.T) {
 		t.Fatal("ready process has no worker DB connection")
 	}
 	ewExit(t, p, syscall.SIGTERM, true)
-	if remaining := ewConnections(t, f, app); remaining != 0 {
-		t.Fatalf("SIGTERM left %d worker connections", remaining)
-	}
+	waitPoolsGone(t, f, "SIGTERM left worker connections", app)
 }
 
 func TestBuyerCheckoutExpiryRuntimeBinaryCrashRiverRescue(t *testing.T) {
@@ -894,7 +892,5 @@ func TestBuyerCheckoutExpiryRuntimeBinaryCrashRiverRescue(t *testing.T) {
 	}
 	ewExit(t, restarted, syscall.SIGTERM, true)
 	ewAssertOrder(t, p, "CANCELLED", "EXPIRED", 1)
-	if remaining := ewConnections(t, f, app); remaining != 0 {
-		t.Fatalf("restarted process left %d worker connections", remaining)
-	}
+	waitPoolsGone(t, f, "restarted process left worker connections", app)
 }

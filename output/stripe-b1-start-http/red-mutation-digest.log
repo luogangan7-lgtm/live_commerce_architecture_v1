@@ -1,0 +1,5 @@
+--- FAIL: TestStripeHostedConfigDigestIsFrozenShape (0.00s)
+    stripe_test.go:31: stripe config digest drifted from the frozen JSON shape
+FAIL
+FAIL	livecommerce/internal/checkout	0.350s
+FAIL

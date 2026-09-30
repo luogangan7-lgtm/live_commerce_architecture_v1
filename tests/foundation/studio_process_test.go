@@ -151,7 +151,7 @@ func TestStudioBackendSTU03RealAPIWorkerRestart(t *testing.T) {
 	apiDSN := mrNamedDSN(t, h.lp.f.runtime.Config().ConnString(), apiName)
 	apiEnv := []string{
 		"LISTEN_ADDR=" + addr, "DATABASE_URL=" + apiDSN,
-		"COMMERCE_STUDIO_ENABLED=1", "COMMERCE_IDENTITY_ENABLED=1", "COMMERCE_IDENTITY_ALLOW_LOOPBACK_TESTS=1",
+		"COMMERCE_STUDIO_ENABLED=1", "COMMERCE_STUDIO_MEDIA_ENABLED=1", "COMMERCE_IDENTITY_ENABLED=1", "COMMERCE_IDENTITY_ALLOW_LOOPBACK_TESTS=1",
 		"COMMERCE_PUBLIC_ORIGIN=" + origin, "COMMERCE_IDENTITY_DATABASE_URL=" + authority.Config().ConnString(),
 		"COMMERCE_BFF_KEY=" + randomToken(), "COMMERCE_OIDC_ISSUER=" + idp.server.URL,
 		"COMMERCE_OIDC_CLIENT_ID=" + browserClientID, "COMMERCE_IDENTITY_PROVIDER_KEY=studio-process-mock-v1",
@@ -220,9 +220,7 @@ func TestStudioBackendSTU03RealAPIWorkerRestart(t *testing.T) {
 	ready(off)
 	request("GET", base, "", "", 404)
 	mrStop(t, off, syscall.SIGTERM, true)
-	if mrPoolCount(t, h.lp.f, apiName) != 0 {
-		t.Fatal("default-off API pool remained")
-	}
+	waitPoolsGone(t, h.lp.f, "default-off API pool remained", apiName)
 	api := mrLaunch(t, apiBinary, "studio-api-enabled", apiEnv)
 	ready(api)
 	prepared := request("GET", base, "", "", 200)
@@ -263,9 +261,7 @@ func TestStudioBackendSTU03RealAPIWorkerRestart(t *testing.T) {
 	}
 	mrStop(t, worker, syscall.SIGTERM, true)
 	mrStop(t, api, syscall.SIGTERM, true)
-	if mrPoolCount(t, h.lp.f, apiName, workerName, executorName) != 0 {
-		t.Fatal("shutdown leaked task-owned pools")
-	}
+	waitPoolsGone(t, h.lp.f, "shutdown leaked task-owned pools", apiName, workerName, executorName)
 	api = mrLaunch(t, apiBinary, "studio-api-reloaded", apiEnv)
 	ready(api)
 	if reopened := request("GET", base, "", "", 200); reopened["attempt"].(map[string]any)["attempt_id"] != h.plan.AttemptID {
@@ -301,9 +297,7 @@ func TestStudioBackendSTU03RealAPIWorkerRestart(t *testing.T) {
 	}
 	mrStop(t, worker, syscall.SIGINT, true)
 	mrStop(t, api, syscall.SIGTERM, true)
-	if mrPoolCount(t, h.lp.f, apiName, workerName, executorName) != 0 {
-		t.Fatal("final shutdown leaked pools")
-	}
+	waitPoolsGone(t, h.lp.f, "final shutdown leaked pools", apiName, workerName, executorName)
 	for _, p := range []*mrProcess{off, api, worker} {
 		log, err := os.ReadFile(p.logPath)
 		if err != nil {

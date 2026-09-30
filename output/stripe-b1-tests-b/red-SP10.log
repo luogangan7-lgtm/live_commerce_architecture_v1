@@ -1,0 +1,21 @@
+# RED proof SP10 (scratch reference implementation, NOT the merged candidate)
+# tests commit: 69809af on base b563bb5 (+docs ba08af8)
+# mutation: worker never calls POST .../expire at the deadline (session stays open at Stripe)
+# command: bash scripts/dev/test-focused.sh '^TestStripeSP10Deadline$' ./tests/foundation   (in the scratch overlay: worktree + reference implementation + this one mutation)
+# exit: 1  (non-zero expected: the gate must fail on the mutation)
+    stripe_flow_test.go:768: timeout waiting for CLOSED_UNPAID fact: op state=UNKNOWN generation=26 last codes=[stripe_report_observed reconcile_claimed stripe_report_observed reconcile_claimed] fake requests=75
+    stripe_flow_test.go:794: timeout waiting for CLOSED_UNPAID fact: op state=UNKNOWN generation=27 last codes=[stripe_report_observed reconcile_claimed stripe_report_observed reconcile_claimed] fake requests=159
+    stripe_flow_test.go:794: timeout waiting for CLOSED_UNPAID fact: op state=UNKNOWN generation=29 last codes=[stripe_report_observed reconcile_claimed stripe_report_observed reconcile_claimed] fake requests=249
+    stripe_flow_test.go:833: no expire attempt before escalation
+--- FAIL: TestStripeSP10Deadline (115.91s)
+    --- FAIL: TestStripeSP10Deadline/expire_then_retrieve_closes_and_restores_exact_stock (31.06s)
+    --- FAIL: TestStripeSP10Deadline/expire_500_retries_with_a_fresh_key_and_releases_only_after_confirmation (31.16s)
+    --- FAIL: TestStripeSP10Deadline/expire_400_already_expired_race_retries_with_a_fresh_key_and_releases_only_after_confirmation (31.51s)
+    --- PASS: TestStripeSP10Deadline/paid_in_the_last_second_captures_not_closes (6.10s)
+    --- FAIL: TestStripeSP10Deadline/still_open_at_plus_60m_escalates_and_keeps_stock (6.22s)
+    --- PASS: TestStripeSP10Deadline/expired_and_paid_is_conflicting_report_without_release (6.35s)
+    --- PASS: TestStripeSP10Deadline/no_request_is_ever_made_with_a_foreign_account_key (0.00s)
+FAIL
+FAIL	livecommerce/tests/foundation	116.787s
+FAIL
+test-focused: top-level PASS=0 FAIL=1 SKIP=0 exit=1

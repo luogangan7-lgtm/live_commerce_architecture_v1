@@ -11,7 +11,8 @@ import {readFile,writeFile,mkdtemp,rm} from "node:fs/promises";
 import {createWriteStream} from "node:fs";
 import {tmpdir} from "node:os";
 import path from "node:path";
-import {chromium,devices,expect} from "@playwright/test";
+import { expect } from "@playwright/test";
+import { engine, launch, ctxOpts, phone, phoneToken } from "./browser-engine.mjs"; // LC_BROWSER_ENGINE=chromium|webkit; chromium behaviour is unchanged
 
 const root=process.cwd(), evidence=process.env.LC_PAYMENT_EVIDENCE;
 assert(evidence && /^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.LC_PAYMENT_CONTROL));
@@ -52,7 +53,7 @@ async function control(){
   assert.equal(response.status,200);return response.json();
 }
 async function context(mobile=false){
-  const c=await browser.newContext(mobile?{...devices["Pixel 7"],viewport:{width:390,height:844},screen:{width:390,height:844},ignoreHTTPSErrors:true}:{ignoreHTTPSErrors:true,viewport:{width:1440,height:900}});contexts.push(c);
+  const c=await browser.newContext(ctxOpts(mobile?{...phone,viewport:{width:390,height:844},screen:{width:390,height:844},ignoreHTTPSErrors:true}:{ignoreHTTPSErrors:true,viewport:{width:1440,height:900}}));contexts.push(c);
   await c.route(/https:\/\/(?:sandbox-api|api)\.payuni\.com\.tw\//,route=>{throw new Error(`unexpected PSP route ${route.request().url()}`);});
   await c.route(psp,async route=>{
     const req=route.request();assert.equal(req.method(),"POST");assert(req.isNavigationRequest());assert.equal(req.url(),psp);assert(postOrder);
@@ -126,7 +127,7 @@ try{
     const upstream=net.connect(edgePort,"127.0.0.1",()=>{socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");if(head.length)upstream.write(head);socket.pipe(upstream).pipe(socket);});
     for(const s of [socket,upstream]){sockets.add(s);s.on("close",()=>sockets.delete(s));s.on("error",()=>{socket.destroy();upstream.destroy();});}
   });
-  browser=await chromium.launch({headless:true,proxy:{server:`http://127.0.0.1:${await listen(proxy)}`}});
+  browser=await launch({headless:true,proxy:{server:`http://127.0.0.1:${await listen(proxy)}`}});
   const c=await context(),page=await c.newPage();
   const entry=await page.goto(product);assert(entry);const csp=entry.headers()["content-security-policy"]??"";
   assert.match(csp,/form-action/);assert(csp.includes("'self'")&&csp.includes(psp)&&csp.includes("https://api.payuni.com.tw/api/upp"));
@@ -167,7 +168,9 @@ try{
 
   const mobile=await context(true);await mobile.addCookies(await c.cookies(origin));
   const mobilePage=await mobile.newPage();await mobilePage.goto(product);
-  assert(await mobilePage.evaluate(()=>navigator.maxTouchPoints>0&&navigator.userAgent.includes("Android")));
+  // Engine-specific: Playwright's macOS WebKit reports navigator.maxTouchPoints===0 even with hasTouch (real iOS Safari reports 5), so under webkit
+  // touch capability is asserted through ontouchstart + (pointer: coarse); Chromium keeps the original maxTouchPoints>0 assertion.
+  assert(await mobilePage.evaluate(([tok,wk])=>(wk?"ontouchstart" in window&&matchMedia("(pointer: coarse)").matches:navigator.maxTouchPoints>0)&&navigator.userAgent.includes(tok),[phoneToken,engine==="webkit"]));
   await mobilePage.locator("header select").selectOption("zh-TW");
   await mobilePage.getByTestId("toggle-order-history").click();await mobilePage.locator(`button[data-order-id="${a}"]`).click();
   await expect(mobilePage.getByTestId("order-id")).toHaveText(a);await expect(mobilePage.getByTestId("payment-status")).toHaveAttribute("data-state","NOT_STARTED");
@@ -191,7 +194,7 @@ try{
   await expect(mobilePage.getByTestId("payment-status")).toHaveAttribute("data-state","PENDING");
   await expect(mobilePage.getByTestId("order-payment")).toHaveAttribute("aria-busy","false");
   await mobilePage.screenshot({path:path.join(evidence,"mobile-native-history-readonly.png"),fullPage:true});
-  passed("BPU02 touch/Android Chromium history Pay replays original key/body after navigated child, then posts once");
+  passed("BPU02 touch/phone-UA history Pay replays original key/body after navigated child, then posts once");
 
   await page.locator("header select").selectOption("zh-CN");await expect(page.locator("html")).toHaveAttribute("lang","zh-CN");
   await expect(page.getByTestId("order-id")).toHaveText(b);

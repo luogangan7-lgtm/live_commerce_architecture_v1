@@ -1,0 +1,20 @@
+# psp/stripe + stripetest unit tests in the worktree (real, no overlay), tests commit 87cfd8f
+# command: GOTOOLCHAIN=go1.27.1 go vet ./internal/integrations/psp/stripe/... && go test -race -count=1 ./internal/integrations/psp/stripe/...
+--- PASS: TestStripeSP02Currency (0.00s)
+--- PASS: TestStripeSP03CreateBody (0.00s)
+--- PASS: TestStripeSP04Classify (0.26s)
+--- PASS: TestStripeSP01Config (0.00s)
+--- PASS: TestStripeSP19LiveRefusal (0.00s)
+--- SKIP: TestStripeSP16Sandbox (0.00s)
+--- PASS: TestStripeSP05Webhook (0.19s)
+PASS
+ok  	livecommerce/internal/integrations/psp/stripe	2.138s
+--- PASS: TestFakeStripeIdempotencyAndSignature (0.00s)
+--- PASS: TestFakeStripeCacheAndPreExecutionFaults (0.00s)
+--- PASS: TestFakeStripeAPIKeyIsolation (0.00s)
+--- PASS: TestFakeStripeMultiAccountScopeAuditAndFaults (0.00s)
+--- PASS: TestFakeStripePatchAndInject (0.00s)
+--- PASS: TestFakeStripeCached500NoSessionAndAgeSession (0.00s)
+PASS
+ok  	livecommerce/internal/integrations/psp/stripe/stripetest	1.935s
+# exit: 0

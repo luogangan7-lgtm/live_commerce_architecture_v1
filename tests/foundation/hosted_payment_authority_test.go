@@ -204,7 +204,7 @@ func TestBuyerPaymentHostedDriftAndFinancialReviewDenyFirstTake(t *testing.T) {
 			mustExec(t, h.f.owner, `UPDATE payments.method_versions SET visible=false WHERE connection_id=$1`, h.account)
 		},
 		"qualification-revoked": func(t *testing.T, h hpHarness, _ checkoutResult) {
-			mustExec(t, h.f.owner, `UPDATE payments.account_qualifications SET revoked_at=clock_timestamp() WHERE id=$1`, h.proof)
+			qualExec(t, h.f.owner, `UPDATE payments.account_qualifications SET revoked_at=clock_timestamp() WHERE id=$1`, h.proof)
 		},
 		"credential-rotated": func(t *testing.T, h hpHarness, _ checkoutResult) {
 			hpRotateFixtureHead(t, h)
@@ -301,7 +301,7 @@ func TestBuyerPaymentHostedQualificationExpiresDuringTakeWait(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { _, e := h.take(); done <- e }()
 	hpAwaitOrderLock(t, h, tx.Conn().PgConn().PID())
-	mustExec(t, h.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '1 second' WHERE id=$1`, h.proof)
+	qualExec(t, h.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '1 second' WHERE id=$1`, h.proof)
 	time.Sleep(1200 * time.Millisecond)
 	if err := tx.Commit(context.Background()); err != nil {
 		t.Fatal(err)
@@ -421,7 +421,7 @@ func TestBuyerPaymentHostedQualificationExpiresDuringFinalWrites(t *testing.T) {
 		h := hpSetup(t)
 		before := h.counts(t)
 		sequence := hpDelayPageWrite(t, h, "INSERT")
-		mustExec(t, h.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1`, h.proof)
+		qualExec(t, h.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1`, h.proof)
 		if _, err := h.begin(t04Key("hp-expire-save")); !errors.Is(err, command.ErrConflict) {
 			t.Fatalf("HP05 late insert did not return conflict: %v", err)
 		}
@@ -437,7 +437,7 @@ func TestBuyerPaymentHostedQualificationExpiresDuringFinalWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 		sequence := hpDelayPageWrite(t, h, "UPDATE OF handed_out_at")
-		mustExec(t, h.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1`, h.proof)
+		qualExec(t, h.f.owner, `UPDATE payments.account_qualifications SET expires_at=clock_timestamp()+interval '2 seconds' WHERE id=$1`, h.proof)
 		if _, err := h.take(); !errors.Is(err, command.ErrConflict) {
 			t.Fatalf("HP05 late handoff update did not return conflict: %v", err)
 		}

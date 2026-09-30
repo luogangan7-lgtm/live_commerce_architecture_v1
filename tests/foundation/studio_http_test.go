@@ -88,8 +88,8 @@ func TestStudioBackendSTU02HTTPRoutesAndStrictInput(t *testing.T) {
 		t.Fatalf("list not current: %v", listed)
 	}
 	detail := request(active, "GET", base+"/"+id, h.lp.token, "", "", 200)
-	studioKeys(t, detail, "draft", "prepared", "attempt", "can_manage")
-	if detail["prepared"] != nil || detail["attempt"] != nil {
+	studioKeys(t, detail, "draft", "prepared", "attempt", "can_manage", "media_enabled")
+	if detail["prepared"] != nil || detail["attempt"] != nil || detail["media_enabled"] != true {
 		t.Fatalf("unprepared draft falsely eligible: %v", detail)
 	}
 	changed := request(active, "PATCH", base+"/"+id, h.lp.token, t04Key("studio-http-edit"), `{"title":"Edited Studio","aspect_ratio":"16:9","expected_version":1}`, 200)

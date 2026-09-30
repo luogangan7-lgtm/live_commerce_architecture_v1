@@ -1,5 +1,9 @@
-// Package payuni implements the narrow PAYUNi UPP v2.0 wire profile.
-// It does not decide whether money has settled or change an order.
+// Package payuni owns the narrow PAYUNi UPP v2.0 wire profile: hosted-form signing, notification
+// verification, trade query and the TWD amount rule.
+//
+// It never decides whether money has settled or changes an order (internal/payments applies
+// captures), never stores a merchant key (accounts custody does), and never calls any host but the
+// configured PAYUNi endpoint.
 package payuni
 
 import (

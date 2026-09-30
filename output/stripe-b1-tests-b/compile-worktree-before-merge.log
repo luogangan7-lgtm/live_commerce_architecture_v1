@@ -1,0 +1,12 @@
+# COMPILE before merge (worktree only): expected to fail on the FROZEN symbols that the other units add -- not a red run (PROCESS.md 2.4)
+# command: GOTOOLCHAIN=go1.27.1 go vet ./tests/foundation ./cmd/...
+tests/foundation/stripe_flow_test.go:47:2: package livecommerce/internal/payments/stripeadmin is not in std (/Users/luolimo/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.1.darwin-arm64/src/livecommerce/internal/payments/stripeadmin)
+# livecommerce/cmd/stripe-admin
+# [livecommerce/cmd/stripe-admin]
+vet: cmd/stripe-admin/stripe_sp15_test.go:96:11: undefined: run
+# livecommerce/cmd/payment-worker
+# [livecommerce/cmd/payment-worker]
+vet: cmd/payment-worker/stripe_sp15_test.go:20:6: undefined: errWorkerStripe
+# livecommerce/cmd/api
+# [livecommerce/cmd/api]
+vet: cmd/api/stripe_sp15_test.go:56:6: undefined: errStripeConfig

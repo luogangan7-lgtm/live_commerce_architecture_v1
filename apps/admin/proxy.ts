@@ -6,10 +6,12 @@ import {
 } from "@live-commerce/i18n";
 import { validOrdersQuery } from "./lib/orders-request";
 import { validStudioQuery } from "./lib/studio-request";
+import { claimsCollection, claimsSubpath } from "./lib/claims-request";
 
 const uuid = "[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}";
 const orderPath = new RegExp(`^/api/stores/${uuid}/orders(?:/${uuid})?$`);
-const studioPath = new RegExp(`^/api/stores/${uuid}/live-sessions(?:/${uuid}(?:/(?:rehearsal/(?:start|stop)|input(?:/(?:start|token|prepared))?))?)?$`);
+const studioPath = new RegExp(`^/api/stores/${uuid}/live-sessions(?:/${uuid}(?:/(?:rehearsal/(?:start|stop)|input(?:/(?:start|token|prepared))?|${claimsSubpath}))?)?$`);
+const storePrefix = new RegExp(`^/api/stores/${uuid}/`);
 const studioPrefix = new RegExp(`^/api/stores/${uuid}/live-sessions(?:/|$)`);
 
 // Guard raw order query syntax before Next normalizes it; auth stays in the route/Go.
@@ -48,7 +50,8 @@ export function proxy(request: NextRequest) {
         { status: 404, headers: { "Cache-Control": "private, no-store", "X-Request-ID": requestID } },
       );
     }
-    if (studioPath.test(decoded) && !validStudioQuery(request.url, request.method === "GET" && decoded.endsWith("/live-sessions"))) {
+    if (studioPath.test(decoded) && !validStudioQuery(request.url, request.method === "GET" &&
+      (decoded.endsWith("/live-sessions") || claimsCollection(decoded.replace(storePrefix, ""))))) {
       const requestID = crypto.randomUUID().replaceAll("-", "");
       return NextResponse.json(
         { code: "invalid_request", message: "Invalid request.", request_id: requestID, retryable: false, details: {} },
@@ -87,6 +90,8 @@ export function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     "/((?!api|_next|demo-assets|favicon.ico|robots.txt).*)",
-    "/api/:path*",
+    // Only the store BFF has guards here. Matching /api/auth/* or /api/onboarding/* made Next buffer
+    // their request bodies before the route's streaming size limit ran (identity-mock red run).
+    "/api/stores/:path*",
   ],
 };

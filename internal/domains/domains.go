@@ -1,4 +1,9 @@
-// Package domains resolves a published storefront from an exact trusted origin.
+// Package domains owns resolving a published storefront from an exact, trusted origin to its
+// published store route (domain, store, domain and publication versions), on the issuer pool.
+//
+// It never trusts Host or forwarded headers on its own (the BFF passes the verified origin), never
+// matches by prefix or wildcard, and never grants buyer or merchant authority: a Route only says
+// which store a public origin is published for.
 package domains
 
 import (

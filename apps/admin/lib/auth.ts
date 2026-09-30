@@ -1,3 +1,7 @@
+// Merchant BFF auth core: config, cookies, Origin/CSRF, private-Go transport. Callers:
+// app/api/auth/{login,callback,logout}, app/api/auth/password/*, app/api/onboarding, app/api/stores*,
+// lib/backend.ts. Go endpoints: /v1/identity/* (internal/identityhttp). Password-login config (U4)
+// mirrors COMMERCE_PASSWORD_LOGIN_ENABLED of cmd/api/identity.go (merchant-password-auth-v1 §5).
 import "server-only";
 import { timingSafeEqual } from "node:crypto";
 import type { APIError, Store } from "./model";
@@ -8,10 +12,12 @@ export const CSRF_COOKIE = "__Host-commerce_csrf";
 export const locales = ["zh-CN", "zh-TW", "en"] as const;
 export type Locale = (typeof locales)[number];
 
-type AuthConfig = {
+export type AuthConfig = {
   publicOrigin: string;
   apiOrigin: string;
-  issuer: string;
+  // null only when COMMERCE_PASSWORD_LOGIN_ENABLED=1 and no OIDC issuer is configured (U4/R-4).
+  issuer: string | null;
+  passwordLogin: boolean;
   bffKey: string;
   allowLoopback: boolean;
 };
@@ -59,35 +65,40 @@ function exactIssuer(value: string, allowLoopback: boolean) {
   return value;
 }
 
-function required(name: string) {
-  const value = process.env[name];
-  if (!value) throw new Error(`missing ${name}`);
-  return value;
-}
-
-function readConfig(): AuthConfig | null {
-  const enabled = process.env.COMMERCE_IDENTITY_ENABLED ?? "";
+// U4: env is a parameter so PA10 can prove the OIDC-less configuration without touching process.env.
+export function readAuthConfig(
+  env: Record<string, string | undefined>,
+): AuthConfig | null {
+  const required = (name: string) => {
+    const value = env[name];
+    if (!value) throw new Error(`missing ${name}`);
+    return value;
+  };
+  const enabled = env.COMMERCE_IDENTITY_ENABLED ?? "";
   if (enabled === "" || enabled === "0") return null;
   if (enabled !== "1") throw new Error("invalid COMMERCE_IDENTITY_ENABLED");
-  if (process.env.COMMERCE_FIXTURE_ENABLED === "1")
+  if (env.COMMERCE_FIXTURE_ENABLED === "1")
     throw new Error("identity and fixture modes are mutually exclusive");
-  const allowLoopback =
-    process.env.COMMERCE_IDENTITY_ALLOW_LOOPBACK_TESTS === "1";
+  const passwordFlag = env.COMMERCE_PASSWORD_LOGIN_ENABLED ?? "";
+  if (passwordFlag !== "" && passwordFlag !== "0" && passwordFlag !== "1")
+    throw new Error("invalid COMMERCE_PASSWORD_LOGIN_ENABLED");
+  const passwordLogin = passwordFlag === "1";
+  const allowLoopback = env.COMMERCE_IDENTITY_ALLOW_LOOPBACK_TESTS === "1";
   const key = required("COMMERCE_BFF_KEY");
   if (!isBase64URL32(key)) throw new Error("invalid COMMERCE_BFF_KEY");
+  // With password login on, an unset issuer means "no OIDC"; a set-but-invalid one still fails startup.
+  const rawIssuer = passwordLogin ? (env.COMMERCE_OIDC_ISSUER ?? "") : required("COMMERCE_OIDC_ISSUER");
   return {
-    publicOrigin: exactOrigin(
-      required("COMMERCE_PUBLIC_ORIGIN"),
-      allowLoopback,
-    ),
+    publicOrigin: exactOrigin(required("COMMERCE_PUBLIC_ORIGIN"), allowLoopback),
     apiOrigin: exactOrigin(required("COMMERCE_API_ORIGIN"), true),
-    issuer: exactIssuer(required("COMMERCE_OIDC_ISSUER"), allowLoopback),
+    issuer: rawIssuer === "" ? null : exactIssuer(rawIssuer, allowLoopback),
+    passwordLogin,
     bffKey: key,
     allowLoopback,
   };
 }
 
-export const authConfig = readConfig();
+export const authConfig = readAuthConfig(process.env);
 
 const messages: Record<string, string> = {
   unauthorized: "Sign-in required.",
@@ -97,18 +108,31 @@ const messages: Record<string, string> = {
   invalid_json: "Invalid JSON body.",
   json_required: "JSON content required.",
   retry_later: "Temporarily unavailable.",
+  invalid_credentials: "Invalid credentials.",
+  invalid_code: "Invalid code.",
+  invalid_email: "Invalid email.",
+  account_exists: "Request could not be completed.",
+  password_policy: "Password does not meet the policy.",
+  throttled: "Too many requests. Try again later.",
+  busy: "Service busy. Try again shortly.",
+  mail_unavailable: "Email is temporarily unavailable.",
   rate_limited: "Too many requests. Try again later.",
   method_not_allowed: "Method not allowed.",
 };
 
-export function localError(status: number, code: string, allow?: string) {
+export function localError(
+  status: number,
+  code: string,
+  allow?: string,
+  details: Record<string, string> = {},
+) {
   const requestID = crypto.randomUUID().replaceAll("-", "");
   const body: APIError = {
     code,
     message: messages[code] ?? "Request failed.",
     request_id: requestID,
     retryable: status >= 500 || status === 429,
-    details: {},
+    details,
   };
   return Response.json(body, {
     status,
@@ -119,6 +143,9 @@ export function localError(status: number, code: string, allow?: string) {
     },
   });
 }
+
+// 404 for every password route unless COMMERCE_PASSWORD_LOGIN_ENABLED=1 (§5).
+export const passwordLoginOn = () => !!authConfig?.passwordLogin;
 
 export function disabledResponse() {
   return localError(404, "not_found");
@@ -244,11 +271,15 @@ function privateHeaders(token?: string) {
   };
 }
 
+// opts.timeoutMs (U3): password login gets 14 s because Go's mail send may take up to 10 s (A6).
+// opts.clientIP (U2) becomes X-Commerce-Client-IP on this BFF-key call only. A timeout is a 503 and
+// is never retried here: a repeated password/code POST would burn throttles and mail budget.
 export async function privateIdentity(
   path: string,
   body: unknown,
   token?: string,
   idempotencyKey?: string,
+  opts: { timeoutMs?: number; clientIP?: string } = {},
 ) {
   if (!authConfig) return disabledResponse();
   try {
@@ -257,11 +288,12 @@ export async function privateIdentity(
       headers: {
         ...privateHeaders(token),
         ...(idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {}),
+        ...(opts.clientIP ? { "X-Commerce-Client-IP": opts.clientIP } : {}),
       },
       body: JSON.stringify(body),
       cache: "no-store",
       redirect: "error",
-      signal: AbortSignal.timeout(6000),
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 6000),
     });
   } catch {
     return localError(503, "retry_later");

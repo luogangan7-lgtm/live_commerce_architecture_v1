@@ -1,3 +1,5 @@
+// GET /[locale]/ (server). Signed-out state renders PasswordAuth when COMMERCE_PASSWORD_LOGIN_ENABLED=1,
+// else the OIDC entry; data comes from lib/backend.ts workspaceData → GET /v1/admin/stores (Go).
 import { notFound } from "next/navigation";
 import { isLocale } from "@live-commerce/i18n";
 import { onboardingPolicy, workspaceData } from "@/lib/backend";
@@ -40,6 +42,8 @@ export default async function Page({
       authResult={one("auth")}
       onboardingEnabled={policy.enabled}
       currencies={policy.currencies}
+      passwordMode={status === "signed-out" && authConfig?.passwordLogin ? "signin" : undefined}
+      oidc={!!authConfig?.issuer}
     />
   );
 }

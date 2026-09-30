@@ -10,14 +10,17 @@ import { readFile, writeFile, mkdtemp, rm } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { chromium, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { launch, ctxOpts } from "./browser-engine.mjs"; // LC_BROWSER_ENGINE=chromium|webkit; chromium behaviour is unchanged
 
 const root = process.cwd(), evidence = process.env.LC_JOINT_EVIDENCE;
 const adminOrigin = process.env.COMMERCE_PUBLIC_ORIGIN, buyerOrigin = "https://buyer.example";
-assert(evidence && /^http:\/\/127\.0\.0\.1:\d+$/.test(adminOrigin));
+// http://127.0.0.1 (chromium) or the https TLS front browserFront() builds for WebKit, which refuses `__Host-` cookies on http.
+assert(evidence && /^https?:\/\/127\.0\.0\.1:\d+$/.test(adminOrigin));
 assert(/^http:\/\/127\.0\.0\.1:\d+$/.test(process.env.LC_JOINT_CONTROL));
 const certDir = await mkdtemp(path.join(tmpdir(), "lc-merchant-buyer-edge-"));
 const children = new Set(), sockets = new Set(), logs = [];
+const running = child => child.exitCode === null && child.signalCode === null;
 let browser, edge, proxy, cases = 0;
 const pass = name => { cases++; console.log(`PASS ${name}`); };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -58,7 +61,7 @@ async function startNext(app, port) {
   });
   children.add(child);
   for (let i = 0; i < 100; i++) {
-    if (child.exitCode !== null) throw new Error(`owned ${app} exited before readiness`);
+    if (!running(child)) throw new Error(`owned ${app} exited before readiness`);
     try {
       const response = await relay(port, {url: app === "admin" ? "/api/stores" : "/api/buyer/session", method: "GET", headers: {host: app === "admin" ? new URL(adminOrigin).host : "buyer.example"}});
       if (response.status === (app === "admin" ? 401 : 200)) return port;
@@ -97,8 +100,8 @@ try {
     }
   });
   const proxyPort = await listen(proxy);
-  browser = await chromium.launch({headless: true, proxy: {server: `http://127.0.0.1:${proxyPort}`, bypass: "127.0.0.1"}});
-  const context = await browser.newContext({ignoreHTTPSErrors: true, viewport: {width: 390, height: 844}});
+  browser = await launch({headless: true, proxy: {server: `http://127.0.0.1:${proxyPort}`, bypass: "127.0.0.1"}});
+  const context = await browser.newContext(ctxOpts({ignoreHTTPSErrors: true, viewport: {width: 390, height: 844}}));
   const merchant = await context.newPage();
   const uiErrors = [];
   context.on("page", page => page.on("pageerror", error => uiErrors.push(error.name)));
@@ -141,7 +144,7 @@ try {
     assert.equal(projected.status, 200);
     assert.deepEqual(projected.body, {product_id: product.id, locale, state: "configured", url: urls[locale]});
     // Actual document GET with scripts disabled models a link preview/crawler.
-    const crawler = await browser.newContext({ignoreHTTPSErrors: true, javaScriptEnabled: false});
+    const crawler = await browser.newContext(ctxOpts({ignoreHTTPSErrors: true, javaScriptEnabled: false}));
     const preview = await crawler.newPage();
     assert.equal((await preview.goto(urls[locale])).status(), 200);
     await crawler.close();
@@ -223,8 +226,10 @@ try {
   if (browser) await browser.close();
   for (const socket of sockets) socket.destroy();
   for (const server of [proxy, edge]) if (server) await new Promise(resolve => server.close(resolve));
-  for (const child of children) { if (child.exitCode === null) child.kill("SIGKILL"); }
-  for (const child of children) if (child.exitCode === null) await once(child, "exit");
+  // A child killed by a signal keeps exitCode === null (signalCode is set instead); awaiting "exit" for a
+  // child that already exited hangs until Node aborts with "unsettled top-level await" (exit 13).
+  for (const child of children) { if (running(child)) child.kill("SIGKILL"); }
+  for (const child of children) if (running(child)) await once(child, "exit");
   for (const log of logs) log.end();
   await rm(certDir, {recursive: true, force: true});
 }

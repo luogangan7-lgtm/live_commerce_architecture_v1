@@ -30,6 +30,7 @@ type workerConfig struct {
 	consumerDSN string
 	concurrency int
 	keys        *meta.PayloadKeyring
+	actor       meta.ClaimsActorKey // K_actor; zero = claim staging off (meta-claims-intake-v1 §3)
 }
 
 func (workerConfig) String() string               { return "metaWorkerConfig{redacted}" }
@@ -77,6 +78,11 @@ func loadConfig(getenv func(string) string) (workerConfig, error) {
 	if err != nil {
 		return workerConfig{}, errWorkerConfig
 	}
+	// COMMERCE_CLAIMS_ACTOR_KEY unset keeps the consumer byte-identical to MC01-07 (no staging);
+	// a malformed value is a configuration error, never a silent "off".
+	if c.actor, _, err = meta.LoadClaimsActorKey(getenv); err != nil {
+		return workerConfig{}, errWorkerConfig
+	}
 	return c, nil
 }
 
@@ -101,7 +107,7 @@ func run(ctx context.Context, getenv func(string) string) error {
 		return errWorkerDatabase
 	}
 	defer consumerPool.Close()
-	client, err := meta.NewConsumerClient(startup, workerPool, consumerPool, c.keys, c.concurrency)
+	client, err := meta.NewConsumerClientWithClaims(startup, workerPool, consumerPool, c.keys, c.actor, c.concurrency)
 	done()
 	if err != nil {
 		return errWorkerDatabase
